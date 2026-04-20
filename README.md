@@ -1,4 +1,4 @@
-# AstroData Automation Engine
+# Vandi Data Center
 
 AstroData Automation Engine is a local Streamlit application for structured dataset profiling, cleaning, filtering, validation, transformation, merging, and export. The codebase is organized as reusable modules so the same services power both the UI and the test suite.
 
