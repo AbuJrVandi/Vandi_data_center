@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -151,3 +152,14 @@ class ExportArtifact:
     mime_type: str
     row_count: int
     column_count: int
+
+
+@dataclass(slots=True)
+class GeneratedFileArtifact:
+    file_name: str
+    file_path: Path
+    mime_type: str
+    row_count: int
+    column_count: int
+    file_size_bytes: int
+    chunk_count: int

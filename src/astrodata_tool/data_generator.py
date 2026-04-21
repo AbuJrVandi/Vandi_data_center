@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import date, timedelta
+from pathlib import Path
 import re
 
 import numpy as np
@@ -13,16 +14,18 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only when faker is u
     Faker = None
 
 from .exceptions import DataGenerationError
-from .models import DatasetArtifact, DatasetGenerationRequest, GeneratedColumnSchema, OperationRecord
+from .models import DatasetArtifact, DatasetGenerationRequest, GeneratedColumnSchema, GeneratedFileArtifact, OperationRecord
 
 
 class DataGenerator:
     MAX_ROWS = 500
+    LARGE_EXPORT_MAX_ROWS = 1_000_000
+    DEFAULT_CHUNK_SIZE = 50_000
     SUPPORTED_TYPES = {"integer", "float", "string", "category", "date", "boolean"}
     SUPPORTED_PATTERNS = {"none", "email", "phone", "name", "company"}
 
     def generate(self, request: DatasetGenerationRequest) -> DatasetArtifact:
-        self._validate_request(request)
+        self._validate_request(request, max_rows=self.MAX_ROWS)
         random_state = np.random.default_rng(request.random_seed)
         fake = self._create_faker(request.random_seed)
         columns = {
@@ -56,14 +59,67 @@ class DataGenerator:
         )
         return artifact
 
-    def _validate_request(self, request: DatasetGenerationRequest) -> None:
+    def generate_large_csv(
+        self,
+        request: DatasetGenerationRequest,
+        *,
+        output_path: str | Path,
+        chunk_size: int | None = None,
+    ) -> GeneratedFileArtifact:
+        self._validate_request(request, max_rows=self.LARGE_EXPORT_MAX_ROWS)
+        chunk_size = int(chunk_size or self.DEFAULT_CHUNK_SIZE)
+        if chunk_size < 1:
+            raise DataGenerationError("Chunk size must be at least 1.")
+
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        random_state = np.random.default_rng(request.random_seed)
+        fake = self._create_faker(request.random_seed)
+        plans = {
+            column.name: self._build_chunk_plan(column, total_rows=request.row_count, random_state=random_state)
+            for column in request.columns
+        }
+
+        chunk_count = 0
+        with output_file.open("w", encoding="utf-8", newline="") as handle:
+            for start_index in range(0, request.row_count, chunk_size):
+                current_size = min(chunk_size, request.row_count - start_index)
+                chunk_frame = pd.DataFrame(
+                    {
+                        column.name: self._generate_chunk_series(
+                            column,
+                            plan=plans[column.name],
+                            start_index=start_index,
+                            row_count=current_size,
+                            total_rows=request.row_count,
+                            random_state=random_state,
+                            fake=fake,
+                        )
+                        for column in request.columns
+                    }
+                )
+                chunk_frame.to_csv(handle, index=False, header=(start_index == 0))
+                chunk_count += 1
+
+        return GeneratedFileArtifact(
+            file_name=output_file.name,
+            file_path=output_file,
+            mime_type="text/csv",
+            row_count=request.row_count,
+            column_count=len(request.columns),
+            file_size_bytes=output_file.stat().st_size,
+            chunk_count=chunk_count,
+        )
+
+    def _validate_request(self, request: DatasetGenerationRequest, *, max_rows: int) -> None:
         dataset_name = request.dataset_name.strip()
         if not dataset_name:
             raise DataGenerationError("Dataset name is required.")
         if request.row_count < 1:
             raise DataGenerationError("Row count must be at least 1.")
-        if request.row_count > self.MAX_ROWS:
-            raise DataGenerationError(f"Row count cannot exceed {self.MAX_ROWS}.")
+        if request.row_count > max_rows:
+            raise DataGenerationError(f"Row count cannot exceed {max_rows}.")
         if not request.columns:
             raise DataGenerationError("Define at least one column in the schema.")
 
@@ -181,6 +237,8 @@ class DataGenerator:
                 values = random_state.choice(np.arange(min_value, max_value + 1, dtype=np.int64), size=row_count, replace=False)
         else:
             values = random_state.integers(min_value, max_value + 1, size=row_count, dtype=np.int64)
+            if sample_value is not None and row_count > 0:
+                values[0] = sample_value
         return pd.Series(values, dtype="int64")
 
     def _generate_float_series(self, column: GeneratedColumnSchema, *, row_count: int, random_state: np.random.Generator) -> pd.Series:
@@ -213,6 +271,190 @@ class DataGenerator:
             values = np.round(values, 4)
         return pd.Series(values, dtype="float64")
 
+    def _build_chunk_plan(
+        self,
+        column: GeneratedColumnSchema,
+        *,
+        total_rows: int,
+        random_state: np.random.Generator,
+    ) -> dict[str, object]:
+        if column.data_type == "integer":
+            sample_value = int(column.sample_value) if column.sample_value not in (None, "") else None
+            min_value, max_value = self._integer_bounds(column, row_count=total_rows, sample_value=sample_value)
+            if self._requires_unique_values(column):
+                if column.primary_key or column.name.lower().endswith("id") or sample_value is not None:
+                    start_value = sample_value if sample_value is not None else min_value
+                    return {"kind": "sequential_integer", "start_value": start_value}
+                return {
+                    "kind": "array",
+                    "values": random_state.choice(np.arange(min_value, max_value + 1, dtype=np.int64), size=total_rows, replace=False),
+                }
+            return {
+                "kind": "integer",
+                "min_value": min_value,
+                "max_value": max_value,
+                "sample_value": sample_value,
+            }
+
+        if column.data_type == "float":
+            sample_value = float(column.sample_value) if column.sample_value not in (None, "") else None
+            min_value, max_value = self._float_bounds(column, row_count=total_rows, sample_value=sample_value)
+            if self._requires_unique_values(column):
+                if total_rows == 1:
+                    values = np.array([sample_value if sample_value is not None else min_value], dtype=float)
+                else:
+                    values = np.linspace(min_value, max_value, num=total_rows, dtype=float)
+                    random_state.shuffle(values)
+                return {"kind": "array", "values": values}
+            return {
+                "kind": "float",
+                "min_value": min_value,
+                "max_value": max_value,
+                "sample_value": sample_value,
+            }
+
+        if column.data_type == "string":
+            return {"kind": "string", "pattern": self._resolve_pattern(column)}
+
+        if column.data_type == "category":
+            categories = self._normalized_categories(column)
+            if self._requires_unique_values(column):
+                return {
+                    "kind": "category_unique",
+                    "categories": categories,
+                    "indices": random_state.choice(np.arange(len(categories), dtype=np.int64), size=total_rows, replace=False),
+                }
+            return {
+                "kind": "category",
+                "categories": categories,
+                "sample_value": self._resolved_category_sample(column),
+            }
+
+        if column.data_type == "date":
+            sample_date, start_date, _, day_count = self._date_parameters(column)
+            if self._requires_unique_values(column):
+                if sample_date is not None:
+                    sample_offset = (pd.Timestamp(sample_date) - start_date).days
+                    available_offsets = np.delete(np.arange(day_count, dtype=np.int64), sample_offset)
+                    selected_offsets = np.concatenate(
+                        (
+                            np.array([sample_offset], dtype=np.int64),
+                            random_state.choice(available_offsets, size=total_rows - 1, replace=False),
+                        )
+                    )
+                else:
+                    selected_offsets = random_state.choice(np.arange(day_count, dtype=np.int64), size=total_rows, replace=False)
+                return {"kind": "date_unique", "start_date": start_date, "offsets": selected_offsets}
+            return {
+                "kind": "date",
+                "start_date": start_date,
+                "day_count": day_count,
+                "sample_date": sample_date,
+            }
+
+        return {
+            "kind": "boolean",
+            "sample_value": None if column.sample_value in (None, "") else bool(column.sample_value),
+            "true_probability": float(column.true_probability),
+        }
+
+    def _generate_chunk_series(
+        self,
+        column: GeneratedColumnSchema,
+        *,
+        plan: dict[str, object],
+        start_index: int,
+        row_count: int,
+        total_rows: int,
+        random_state: np.random.Generator,
+        fake,
+    ) -> pd.Series:
+        kind = str(plan["kind"])
+
+        if kind == "array":
+            values = plan["values"][start_index : start_index + row_count]
+            return self._series_from_dtype(column.data_type, values)
+
+        if kind == "sequential_integer":
+            start_value = int(plan["start_value"]) + start_index
+            values = np.arange(start_value, start_value + row_count, dtype=np.int64)
+            return pd.Series(values, dtype="int64")
+
+        if kind == "integer":
+            values = random_state.integers(int(plan["min_value"]), int(plan["max_value"]) + 1, size=row_count, dtype=np.int64)
+            sample_value = plan["sample_value"]
+            if sample_value is not None and start_index == 0 and row_count > 0:
+                values[0] = int(sample_value)
+            return pd.Series(values, dtype="int64")
+
+        if kind == "float":
+            min_value = float(plan["min_value"])
+            max_value = float(plan["max_value"])
+            sample_value = plan["sample_value"]
+            if sample_value is not None:
+                deviation = max((max_value - min_value) / 6, 1.0)
+                values = random_state.normal(loc=float(sample_value), scale=deviation, size=row_count)
+                values = np.clip(values, min_value, max_value)
+            else:
+                values = random_state.uniform(min_value, max_value, size=row_count)
+            values = np.round(values, 4)
+            if sample_value is not None and start_index == 0 and row_count > 0:
+                values[0] = float(sample_value)
+            return pd.Series(values, dtype="float64")
+
+        if kind == "string":
+            pattern = str(plan["pattern"])
+            values = [
+                self._generate_string_value(column, pattern, start_index + index, fake=fake, random_state=random_state)
+                for index in range(row_count)
+            ]
+            if self._requires_unique_values(column):
+                values = [
+                    self._force_unique_string(column.name, pattern, value, start_index + index)
+                    for index, value in enumerate(values)
+                ]
+            return pd.Series(values, dtype="string")
+
+        if kind == "category_unique":
+            indices = plan["indices"][start_index : start_index + row_count]
+            categories = list(plan["categories"])
+            values = np.array([categories[int(index)] for index in indices], dtype=object)
+            return pd.Series(pd.Categorical(values, categories=categories))
+
+        if kind == "category":
+            categories = list(plan["categories"])
+            values = random_state.choice(np.array(categories, dtype=object), size=row_count, replace=True)
+            sample_value = plan.get("sample_value")
+            if sample_value is not None and start_index == 0 and row_count > 0:
+                values[0] = str(sample_value)
+            return pd.Series(pd.Categorical(values, categories=categories))
+
+        if kind == "date_unique":
+            offsets = plan["offsets"][start_index : start_index + row_count]
+            start_date = pd.Timestamp(plan["start_date"])
+            values = pd.to_datetime(start_date + pd.to_timedelta(offsets, unit="D"))
+            return pd.Series(values)
+
+        if kind == "date":
+            start_date = pd.Timestamp(plan["start_date"])
+            day_count = int(plan["day_count"])
+            sample_date = plan["sample_date"]
+            if sample_date is not None:
+                center_offset = (pd.Timestamp(sample_date) - start_date).days
+                offsets = np.round(random_state.normal(loc=center_offset, scale=max(day_count / 8, 1), size=row_count)).astype(np.int64)
+                offsets = np.clip(offsets, 0, day_count - 1)
+            else:
+                offsets = random_state.integers(0, day_count, size=row_count, dtype=np.int64)
+            values = pd.Series(pd.to_datetime(start_date + pd.to_timedelta(offsets, unit="D")))
+            if sample_date is not None and start_index == 0 and row_count > 0:
+                values.iloc[0] = pd.Timestamp(sample_date)
+            return values
+
+        values = random_state.random(row_count) < float(plan["true_probability"])
+        if plan["sample_value"] is not None and start_index == 0 and row_count > 0:
+            values[0] = bool(plan["sample_value"])
+        return pd.Series(values, dtype="bool")
+
     def _generate_string_series(
         self,
         column: GeneratedColumnSchema,
@@ -236,8 +478,9 @@ class DataGenerator:
             values = random_state.choice(np.array(categories, dtype=object), size=row_count, replace=False)
         else:
             values = random_state.choice(np.array(categories, dtype=object), size=row_count, replace=True)
-            if column.sample_value not in (None, ""):
-                values[0] = str(column.sample_value).strip()
+            sample_value = self._resolved_category_sample(column)
+            if sample_value is not None:
+                values[0] = sample_value
         return pd.Series(pd.Categorical(values, categories=categories))
 
     def _generate_date_series(self, column: GeneratedColumnSchema, *, row_count: int, random_state: np.random.Generator) -> pd.Series:
@@ -268,6 +511,50 @@ class DataGenerator:
         if column.sample_value not in (None, "") and row_count > 0:
             values[0] = bool(column.sample_value)
         return pd.Series(values, dtype="bool")
+
+    def _integer_bounds(self, column: GeneratedColumnSchema, *, row_count: int, sample_value: int | None) -> tuple[int, int]:
+        if column.min_value is not None:
+            min_value = int(column.min_value)
+        elif sample_value is not None:
+            min_value = sample_value if self._requires_unique_values(column) else max(0, sample_value - max(row_count, 10))
+        else:
+            min_value = 1
+        if column.max_value is not None:
+            max_value = int(column.max_value)
+        elif sample_value is not None:
+            max_value = max(sample_value + max(row_count * 2, 25), min_value + row_count + 4)
+        else:
+            max_value = max(row_count * 10, min_value + row_count + 24)
+        return min_value, max_value
+
+    def _float_bounds(self, column: GeneratedColumnSchema, *, row_count: int, sample_value: float | None) -> tuple[float, float]:
+        if column.min_value is not None:
+            min_value = float(column.min_value)
+        elif sample_value is not None:
+            min_value = max(0.0, sample_value - max(float(row_count * 2), 15.0))
+        else:
+            min_value = 0.0
+        if column.max_value is not None:
+            max_value = float(column.max_value)
+        elif sample_value is not None:
+            max_value = sample_value + max(float(row_count * 2), 15.0)
+        else:
+            max_value = max(float(row_count * 12), 250.0)
+        return min_value, max_value
+
+    def _date_parameters(self, column: GeneratedColumnSchema) -> tuple[date | None, pd.Timestamp, pd.Timestamp, int]:
+        sample_date = self._coerce_sample_date(column.sample_value, name=column.name)
+        start_date = pd.Timestamp(column.start_date or ((sample_date - timedelta(days=45)) if sample_date else (date.today() - timedelta(days=365))))
+        end_date = pd.Timestamp(column.end_date or ((sample_date + timedelta(days=45)) if sample_date else date.today()))
+        day_count = (end_date - start_date).days + 1
+        return sample_date, start_date, end_date, day_count
+
+    def _series_from_dtype(self, data_type: str, values) -> pd.Series:
+        if data_type == "integer":
+            return pd.Series(values, dtype="int64")
+        if data_type == "float":
+            return pd.Series(values, dtype="float64")
+        return pd.Series(values)
 
     @staticmethod
     def _requires_unique_values(column: GeneratedColumnSchema) -> bool:
@@ -316,7 +603,7 @@ class DataGenerator:
             return fake.company() if fake is not None else self._fallback_company(random_state)
         if fake is not None:
             return fake.sentence(nb_words=3).replace(".", "")
-        column_slug = self._slugify(column_name)
+        column_slug = self._slugify(column.name)
         return f"{column_slug}_value_{index + 1}"
 
     def _force_unique_string(self, column_name: str, pattern: str, value: str, index: int) -> str:
@@ -337,14 +624,67 @@ class DataGenerator:
         slug = self._slugify(column_name) or "value"
         return f"{slug.upper()}-{sequence:04d}"
 
-    @staticmethod
-    def _normalized_categories(column: GeneratedColumnSchema) -> list[str]:
-        categories = [value.strip() for value in column.categories if str(value).strip()]
-        if column.sample_value not in (None, ""):
-            sample_category = str(column.sample_value).strip()
-            if sample_category and sample_category not in categories:
-                categories.insert(0, sample_category)
+    def _normalized_categories(self, column: GeneratedColumnSchema) -> list[str]:
+        categories = [label for _, label in self._category_entries(column)]
+        sample_category = self._resolved_category_sample(column)
+        if sample_category and sample_category not in categories:
+            categories.insert(0, sample_category)
         return categories
+
+    def _resolved_category_sample(self, column: GeneratedColumnSchema) -> str | None:
+        if column.sample_value in (None, ""):
+            return None
+        entries = self._category_entries(column)
+        resolved_value = self._resolve_category_value(column.sample_value, entries)
+        return resolved_value or None
+
+    def _category_entries(self, column: GeneratedColumnSchema) -> list[tuple[str | None, str]]:
+        entries: list[tuple[str | None, str]] = []
+        seen_codes: set[str] = set()
+        seen_labels: set[str] = set()
+        for raw_value in column.categories:
+            raw_text = str(raw_value).strip()
+            if not raw_text:
+                continue
+            code, label = self._split_category_mapping(raw_text)
+            normalized_code = code.strip() if code is not None else None
+            normalized_label = label.strip()
+            if not normalized_label:
+                raise DataGenerationError(f"Category column '{column.name}' has an empty mapped label.")
+            if normalized_code:
+                if normalized_code in seen_codes:
+                    raise DataGenerationError(
+                        f"Category column '{column.name}' has duplicate category code '{normalized_code}'."
+                    )
+                seen_codes.add(normalized_code)
+            if normalized_label in seen_labels:
+                raise DataGenerationError(
+                    f"Category column '{column.name}' has duplicate category label '{normalized_label}'."
+                )
+            seen_labels.add(normalized_label)
+            entries.append((normalized_code, normalized_label))
+        return entries
+
+    @staticmethod
+    def _split_category_mapping(raw_value: str) -> tuple[str | None, str]:
+        for separator in ("=", ":"):
+            if separator in raw_value:
+                code, label = raw_value.split(separator, 1)
+                return code, label
+        return None, raw_value
+
+    @staticmethod
+    def _resolve_category_value(value: object, entries: list[tuple[str | None, str]]) -> str:
+        normalized_value = str(value).strip()
+        if not normalized_value:
+            return ""
+        for code, label in entries:
+            if code is not None and normalized_value == code:
+                return label
+        for _, label in entries:
+            if normalized_value == label:
+                return label
+        return normalized_value
 
     @staticmethod
     def _coerce_sample_date(value: object, *, name: str) -> date | None:
@@ -371,6 +711,8 @@ class DataGenerator:
     def _phone_from_sample(self, sample_value: str, index: int, *, random_state: np.random.Generator) -> str:
         digits = "".join(character for character in sample_value if character.isdigit())
         if len(digits) >= 7:
+            if index == 0:
+                return sample_value
             prefix = digits[:-4] or "1202555"
             return f"+{prefix}{index + 1000:04d}" if sample_value.startswith("+") else f"{prefix}{index + 1000:04d}"
         return f"+1-202-555-{random_state.integers(1000, 9999):04d}"

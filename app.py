@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from html import escape
 import inspect
 from io import BytesIO
+import numbers
 from pathlib import Path
 import re
 import sys
@@ -14,6 +16,7 @@ import streamlit.components.v1 as components
 
 ROOT_DIR = Path(__file__).resolve().parent
 SRC_DIR = ROOT_DIR / "src"
+GENERATED_EXPORT_DIR = ROOT_DIR / "generated_exports"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
@@ -22,6 +25,7 @@ from astrodata_tool import (
     DatasetArtifact,
     DatasetGenerationRequest,
     FilterCondition,
+    GeneratedFileArtifact,
     GeneratedColumnSchema,
     MergeConfiguration,
 )
@@ -39,7 +43,7 @@ from astrodata_tool.exceptions import DataAutomationError
 
 
 st.set_page_config(
-    page_title="AstroData Automation Engine",
+    page_title="Vandi Data Center Automation Engine",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -47,80 +51,384 @@ st.set_page_config(
 
 APP_CSS = """
 <style>
+    :root {
+        --app-bg-top: #f9fbff;
+        --app-bg-bottom: #eef3fb;
+        --card-bg: rgba(255, 255, 255, 0.92);
+        --card-bg-strong: rgba(255, 255, 255, 0.98);
+        --card-border: rgba(27, 46, 94, 0.10);
+        --text-strong: #172033;
+        --text-body: #53627f;
+        --text-muted: #6f7f9b;
+        --accent-soft: rgba(47, 107, 255, 0.10);
+        --accent: #2f6bff;
+        --shadow-soft: 0 16px 38px rgba(26, 43, 77, 0.08);
+    }
     .stApp {
         background:
-            radial-gradient(circle at top right, rgba(73,107,255,0.18), transparent 26%),
-            radial-gradient(circle at bottom left, rgba(33,214,151,0.10), transparent 24%),
-            linear-gradient(180deg, #08101f 0%, #07111d 100%);
+            radial-gradient(circle at top right, rgba(47,107,255,0.14), transparent 24%),
+            radial-gradient(circle at bottom left, rgba(32,184,133,0.09), transparent 22%),
+            linear-gradient(180deg, var(--app-bg-top) 0%, var(--app-bg-bottom) 100%);
+        color: var(--text-strong);
     }
     .app-shell {
         padding: 0.75rem 0 1rem 0;
     }
     .hero {
-        border: 1px solid rgba(255,255,255,0.08);
-        background: linear-gradient(180deg, rgba(13,21,41,0.94), rgba(10,18,34,0.96));
+        border: 1px solid var(--card-border);
+        background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(247,250,255,0.98));
         border-radius: 18px;
         padding: 1.4rem 1.5rem;
         margin-bottom: 1rem;
-        box-shadow: 0 18px 50px rgba(0,0,0,0.24);
+        box-shadow: var(--shadow-soft);
     }
     .hero h1 {
         margin: 0;
         font-size: 2rem;
         line-height: 1.2;
+        color: var(--text-strong);
     }
     .hero p {
         margin: 0.55rem 0 0 0;
-        color: #9fb0d0;
+        color: var(--text-body);
         max-width: 60rem;
     }
     .metric-card {
-        border: 1px solid rgba(255,255,255,0.07);
-        background: rgba(16, 26, 48, 0.92);
+        border: 1px solid var(--card-border);
+        background: var(--card-bg);
         border-radius: 16px;
         padding: 1rem 1rem 0.85rem 1rem;
         min-height: 120px;
+        box-shadow: 0 10px 26px rgba(29, 48, 86, 0.05);
     }
     .metric-label {
-        color: #91a2c1;
+        color: var(--text-muted);
         font-size: 0.8rem;
         text-transform: uppercase;
         letter-spacing: 0.06em;
     }
     .metric-value {
-        color: #f4f7ff;
+        color: var(--text-strong);
         font-size: 1.8rem;
         font-weight: 700;
         margin-top: 0.25rem;
     }
     .metric-detail {
-        color: #93a4c4;
+        color: var(--text-body);
         font-size: 0.9rem;
         margin-top: 0.25rem;
     }
     .section-card {
-        border: 1px solid rgba(255,255,255,0.07);
-        background: rgba(11, 19, 36, 0.92);
+        border: 1px solid var(--card-border);
+        background: var(--card-bg);
         border-radius: 16px;
         padding: 1rem 1rem 1.1rem 1rem;
         margin-bottom: 1rem;
     }
+    .module-header {
+        border: 1px solid var(--card-border);
+        background:
+            radial-gradient(circle at top right, rgba(47, 107, 255, 0.10), transparent 24%),
+            linear-gradient(180deg, rgba(255,255,255,0.96), rgba(244,248,255,0.98));
+        border-radius: 18px;
+        padding: 1.1rem 1.2rem 1.15rem 1.2rem;
+        margin-bottom: 0.9rem;
+        box-shadow: var(--shadow-soft);
+    }
+    .module-kicker {
+        display: inline-block;
+        margin-bottom: 0.55rem;
+        padding: 0.22rem 0.55rem;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.76rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+    .module-header h1 {
+        margin: 0;
+        font-size: 1.7rem;
+        line-height: 1.1;
+        color: var(--text-strong);
+    }
+    .module-header p {
+        margin: 0.45rem 0 0 0;
+        color: var(--text-body);
+        max-width: 58rem;
+        font-size: 0.97rem;
+    }
+    .workspace-card {
+        border: 1px solid var(--card-border);
+        background: var(--card-bg);
+        border-radius: 14px;
+        padding: 0.9rem 1rem;
+        margin-bottom: 1rem;
+    }
+    .workspace-label {
+        color: var(--text-muted);
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.35rem;
+    }
+    .workspace-value {
+        color: var(--text-strong);
+        font-size: 1rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    .workspace-detail {
+        color: var(--text-body);
+        font-size: 0.84rem;
+        margin-top: 0.25rem;
+    }
+    .stage-block {
+        margin: 0.15rem 0 0.8rem 0;
+    }
+    .stage-block h3 {
+        margin: 0;
+        font-size: 1.02rem;
+        color: var(--text-strong);
+    }
+    .stage-block p {
+        margin: 0.25rem 0 0 0;
+        color: var(--text-body);
+        font-size: 0.9rem;
+    }
     .section-title {
         margin: 0;
         font-size: 1.45rem;
-        color: #f5f8ff;
+        color: var(--text-strong);
     }
     .section-lead {
         margin: 0.35rem 0 0 0;
-        color: #9fb0d0;
+        color: var(--text-body);
         max-width: 56rem;
     }
     .small-note {
-        color: #91a2c1;
+        color: var(--text-muted);
         font-size: 0.92rem;
+    }
+    [data-testid="stSidebar"] {
+        background:
+            radial-gradient(circle at top right, rgba(47, 107, 255, 0.10), transparent 28%),
+            linear-gradient(180deg, rgba(248,250,255,0.98), rgba(239,244,251,0.99));
+        border-right: 1px solid rgba(27, 46, 94, 0.08);
+    }
+    [data-testid="stSidebar"] .block-container {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+    .sidebar-brand {
+        border: 1px solid var(--card-border);
+        background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246,249,255,0.98));
+        border-radius: 18px;
+        padding: 1rem 1rem 0.95rem 1rem;
+        margin-bottom: 0.9rem;
+        box-shadow: var(--shadow-soft);
+    }
+    .sidebar-brand-label {
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        font-size: 0.75rem;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+    }
+    .sidebar-brand-title {
+        color: var(--text-strong);
+        font-size: 1.2rem;
+        font-weight: 700;
+        line-height: 1.2;
+        margin: 0;
+    }
+    .sidebar-brand-copy {
+        color: var(--text-body);
+        font-size: 0.87rem;
+        margin-top: 0.35rem;
+    }
+    .sidebar-panel {
+        border: 1px solid var(--card-border);
+        background: var(--card-bg);
+        border-radius: 16px;
+        padding: 0.95rem 1rem;
+        margin-bottom: 0.85rem;
+    }
+    .sidebar-panel-title {
+        color: var(--text-strong);
+        font-size: 0.9rem;
+        font-weight: 700;
+        margin: 0 0 0.75rem 0;
+    }
+    .sidebar-status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.32rem 0.62rem;
+        border-radius: 999px;
+        font-size: 0.76rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        margin-bottom: 0.8rem;
+    }
+    .sidebar-status-badge.neutral {
+        background: rgba(127, 223, 255, 0.12);
+        color: #7fdfff;
+    }
+    .sidebar-status-badge.success {
+        background: rgba(46, 204, 113, 0.14);
+        color: #7cf1af;
+    }
+    .sidebar-status-badge.warning {
+        background: rgba(255, 183, 77, 0.15);
+        color: #ffd083;
+    }
+    .sidebar-status-badge.danger {
+        background: rgba(255, 107, 129, 0.16);
+        color: #ff9aad;
+    }
+    .sidebar-keyline {
+        color: var(--text-body);
+        font-size: 0.82rem;
+        margin-bottom: 0.8rem;
+        line-height: 1.45;
+    }
+    .sidebar-stat-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem;
+    }
+    .sidebar-stat {
+        border: 1px solid rgba(27, 46, 94, 0.08);
+        background: rgba(246, 249, 255, 0.95);
+        border-radius: 14px;
+        padding: 0.72rem 0.78rem;
+        min-height: 88px;
+    }
+    .sidebar-stat-label {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+    .sidebar-stat-value {
+        color: var(--text-strong);
+        font-size: 0.97rem;
+        font-weight: 700;
+        margin-top: 0.32rem;
+        line-height: 1.25;
+        word-break: break-word;
+    }
+    .sidebar-stat-detail {
+        color: var(--text-body);
+        font-size: 0.77rem;
+        margin-top: 0.28rem;
+        line-height: 1.3;
+    }
+    .sidebar-activity-list {
+        display: grid;
+        gap: 0.65rem;
+    }
+    .sidebar-activity-item {
+        border-left: 2px solid rgba(47, 107, 255, 0.45);
+        padding-left: 0.7rem;
+    }
+    .sidebar-activity-item strong {
+        display: block;
+        color: var(--text-strong);
+        font-size: 0.84rem;
+        margin-bottom: 0.15rem;
+    }
+    .sidebar-activity-item span {
+        display: block;
+        color: var(--text-body);
+        font-size: 0.77rem;
+        line-height: 1.35;
+    }
+    .dashboard-hero {
+        border: 1px solid var(--card-border);
+        background:
+            radial-gradient(circle at top right, rgba(47, 107, 255, 0.10), transparent 24%),
+            linear-gradient(180deg, rgba(255,255,255,0.97), rgba(244,248,255,0.98));
+        border-radius: 18px;
+        padding: 1.2rem 1.25rem;
+        margin-bottom: 1rem;
+        box-shadow: var(--shadow-soft);
+    }
+    .dashboard-hero h3 {
+        margin: 0;
+        font-size: 1.2rem;
+        color: var(--text-strong);
+    }
+    .dashboard-hero p {
+        margin: 0.38rem 0 0 0;
+        color: var(--text-body);
+        line-height: 1.5;
+    }
+    .dashboard-note {
+        border: 1px solid var(--card-border);
+        background: var(--card-bg-strong);
+        border-radius: 16px;
+        padding: 1rem 1.05rem;
+        margin-bottom: 1rem;
+    }
+    .dashboard-note-label {
+        color: var(--text-muted);
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.45rem;
+    }
+    .dashboard-note-value {
+        color: var(--text-strong);
+        font-size: 1.05rem;
+        font-weight: 700;
+        line-height: 1.3;
+    }
+    .dashboard-note-copy {
+        color: var(--text-body);
+        font-size: 0.86rem;
+        margin-top: 0.4rem;
+        line-height: 1.45;
     }
 </style>
 """
+
+PAGE_OPTIONS = [
+    "Dashboard",
+    "Cleaning",
+    "Filtering",
+    "Validation",
+    "Transformation",
+    "Merging",
+    "Visual Analytics",
+    "Statistical Tables",
+    "Export",
+    "History",
+]
+
+PAGE_DESCRIPTIONS = {
+    "Dashboard": "Workspace controls, current dataset health, and session status.",
+    "Cleaning": "Deduplicate records and apply missing-value treatment.",
+    "Filtering": "Refine the active dataset with structured conditions.",
+    "Validation": "Run schema, range, and outlier checks before downstream work.",
+    "Transformation": "Rename, derive, convert, and reshape the dataset.",
+    "Merging": "Join datasets in multi-dataset workflows.",
+    "Visual Analytics": "Build export-ready charts from the active dataset.",
+    "Statistical Tables": "Generate formatted statistical summaries for reporting.",
+    "Export": "Package the active dataset for downstream delivery.",
+    "History": "Review the audit trail for the current workspace session.",
+}
+
+QUICK_ACTIONS = [
+    "Cleaning",
+    "Validation",
+    "Transformation",
+    "Visual Analytics",
+]
 
 
 def init_state() -> None:
@@ -144,6 +452,12 @@ def init_state() -> None:
         st.session_state.export_artifact = None
     if "export_context" not in st.session_state:
         st.session_state.export_context = None
+    if "page" not in st.session_state:
+        st.session_state.page = "Dashboard"
+    if "page_selector" not in st.session_state:
+        st.session_state.page_selector = st.session_state.page
+    if "generator_large_export_artifact" not in st.session_state:
+        st.session_state.generator_large_export_artifact = None
 
 
 def dataset_names() -> list[str]:
@@ -188,6 +502,101 @@ def add_dataset(dataset: DatasetArtifact) -> None:
     st.session_state.export_context = None
 
 
+def _format_timestamp(value) -> str:
+    return value.astimezone().strftime("%b %d, %Y %I:%M %p")
+
+
+def _workspace_summary() -> dict[str, object]:
+    dataset = get_selected_dataset()
+    records = st.session_state.engine.logger.list_records()
+    last_record = records[-1] if records else None
+    last_validation = st.session_state.last_validation
+    input_mode = st.session_state.input_mode
+
+    if input_mode == "Generate Dataset":
+        mode_label = "Generated schema workspace"
+        mode_detail = "Synthetic dataset builder is active."
+    elif st.session_state.mode:
+        mode_label = str(st.session_state.mode)
+        mode_detail = "Upload flow is configured for the current workspace."
+    else:
+        mode_label = "Scope not selected"
+        mode_detail = "Choose single or multiple dataset handling."
+
+    status_label = "Awaiting data"
+    status_detail = "Load or generate a dataset to activate the workflow."
+    status_tone = "warning"
+    if dataset:
+        status_label = "Workspace live"
+        status_detail = f"`{dataset.name}` is ready for the next module."
+        status_tone = "success"
+    if last_record:
+        status_label = "Recent activity"
+        status_detail = last_record.summary
+        status_tone = "neutral"
+    if last_validation and dataset and last_validation.dataset_name == dataset.name:
+        validation_summary = last_validation.summary()
+        error_count = validation_summary.get("error", 0)
+        warning_count = validation_summary.get("warning", 0)
+        if error_count:
+            status_label = "Validation issues"
+            status_detail = f"{error_count} error(s) and {warning_count} warning(s) need review."
+            status_tone = "danger"
+        elif warning_count:
+            status_label = "Validation warnings"
+            status_detail = f"{warning_count} warning(s) were flagged in the latest validation run."
+            status_tone = "warning"
+        elif dataset:
+            status_label = "Validated"
+            status_detail = "The active dataset passed the latest validation checks."
+            status_tone = "success"
+
+    return {
+        "dataset": dataset,
+        "dataset_count": len(dataset_names()),
+        "records": records,
+        "record_count": len(records),
+        "last_record": last_record,
+        "input_mode": input_mode,
+        "mode_label": mode_label,
+        "mode_detail": mode_detail,
+        "status_label": status_label,
+        "status_detail": status_detail,
+        "status_tone": status_tone,
+    }
+
+
+def _render_sidebar_stat(label: str, value: str, detail: str) -> str:
+    return f"""
+    <div class="sidebar-stat">
+        <div class="sidebar-stat-label">{escape(label)}</div>
+        <div class="sidebar-stat-value">{escape(value)}</div>
+        <div class="sidebar-stat-detail">{escape(detail)}</div>
+    </div>
+    """
+
+
+def _recent_activity_frame(records: list, *, limit: int = 6) -> pd.DataFrame:
+    recent_records = records[-limit:][::-1]
+    return pd.DataFrame(
+        [
+            {
+                "time": _format_timestamp(record.timestamp),
+                "operation": record.operation_name,
+                "summary": record.summary,
+                "result_dataset": record.dataset_after or record.dataset_before or "-",
+            }
+            for record in recent_records
+        ]
+    )
+
+
+def _set_page(page: str) -> None:
+    st.session_state.page = page
+    st.session_state.page_selector = page
+    st.rerun()
+
+
 def render_metric_card(label: str, value: str, detail: str) -> None:
     st.markdown(
         f"""
@@ -195,6 +604,61 @@ def render_metric_card(label: str, value: str, detail: str) -> None:
             <div class="metric-label">{label}</div>
             <div class="metric-value">{value}</div>
             <div class="metric-detail">{detail}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_workspace_card(label: str, value: str, detail: str) -> None:
+    st.markdown(
+        f"""
+        <div class="workspace-card">
+            <div class="workspace-label">{label}</div>
+            <div class="workspace-value">{value}</div>
+            <div class="workspace-detail">{detail}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_module_shell(title: str, description: str) -> None:
+    dataset = get_selected_dataset()
+    input_mode = st.session_state.input_mode
+    workspace_scope = st.session_state.mode or "Unset"
+    active_dataset = dataset.name if dataset else "No dataset"
+    dataset_shape = f"{dataset.row_count:,} rows x {dataset.column_count:,} columns" if dataset else "No active data"
+    source_type = dataset.source_type.upper() if dataset else "Workspace waiting for data"
+
+    st.markdown(
+        f"""
+        <div class="module-header">
+            <div class="module-kicker">Workflow Module</div>
+            <h1>{title}</h1>
+            <p>{description}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    workspace_columns = st.columns(4)
+    with workspace_columns[0]:
+        render_workspace_card("Input Mode", input_mode, "How data enters the workspace")
+    with workspace_columns[1]:
+        render_workspace_card("Workspace Scope", workspace_scope, "Single or multiple dataset handling")
+    with workspace_columns[2]:
+        render_workspace_card("Active Dataset", active_dataset, source_type)
+    with workspace_columns[3]:
+        render_workspace_card("Current Shape", dataset_shape, "Current artifact under analysis")
+
+
+def render_stage_header(title: str, description: str) -> None:
+    st.markdown(
+        f"""
+        <div class="stage-block">
+            <h3>{title}</h3>
+            <p>{description}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -213,10 +677,133 @@ def render_section_header(title: str, description: str) -> None:
     )
 
 
-def render_preview(dataset: DatasetArtifact, *, title: str = "Data Preview", rows: int = 15) -> None:
+def _column_priority_score(column_name: str) -> int:
+    normalized = column_name.lower()
+    score = 0
+    priority_keywords = {
+        "id": 10,
+        "name": 9,
+        "status": 9,
+        "state": 8,
+        "type": 8,
+        "category": 8,
+        "date": 9,
+        "time": 8,
+        "created": 8,
+        "updated": 7,
+        "amount": 8,
+        "total": 8,
+        "count": 8,
+        "value": 7,
+        "score": 7,
+        "price": 7,
+        "email": 7,
+        "phone": 6,
+        "error": 8,
+        "warning": 7,
+    }
+    for keyword, weight in priority_keywords.items():
+        if keyword in normalized:
+            score += weight
+    return score
+
+
+def _select_priority_columns(dataframe: pd.DataFrame, *, limit: int = 8) -> list[str]:
+    ordered = sorted(
+        enumerate(list(dataframe.columns)),
+        key=lambda item: (-_column_priority_score(item[1]), item[0]),
+    )
+    return [column for _, column in ordered[: min(limit, len(ordered))]]
+
+
+def _format_table_value(value: object) -> str:
+    if isinstance(value, dict):
+        return "; ".join(f"{key}: {_format_table_value(item)}" for key, item in list(value.items())[:4]) or "—"
+    if isinstance(value, (list, tuple, set)):
+        preview_values = [_format_table_value(item) for item in list(value)[:4]]
+        return ", ".join(preview_values) if preview_values else "—"
+    if value is None or pd.isna(value):
+        return "—"
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.strftime("%Y-%m-%d %H:%M")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, numbers.Integral) and not isinstance(value, bool):
+        return f"{int(value):,}"
+    if isinstance(value, numbers.Real) and not isinstance(value, bool):
+        numeric_value = float(value)
+        if abs(numeric_value) >= 1000:
+            return f"{numeric_value:,.2f}"
+        if numeric_value.is_integer():
+            return f"{numeric_value:,.0f}"
+        return f"{numeric_value:,.3f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _prepare_table_frame(
+    dataframe: pd.DataFrame,
+    *,
+    rows: int | None = None,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    visible_frame = dataframe.copy()
+    if columns is not None:
+        visible_columns = [column for column in columns if column in visible_frame.columns]
+        visible_frame = visible_frame.loc[:, visible_columns]
+    if rows is not None:
+        visible_frame = visible_frame.head(rows)
+    if visible_frame.empty:
+        return visible_frame
+    return visible_frame.apply(lambda column: column.map(_format_table_value))
+
+
+def _style_severity_value(value: object) -> str:
+    normalized = str(value).strip().lower()
+    palette = {
+        "error": ("#fff1f2", "#c62828"),
+        "warning": ("#fff7e8", "#b26a00"),
+        "info": ("#eef6ff", "#1e5eff"),
+    }
+    background, foreground = palette.get(normalized, ("#f4f7fb", "#53627f"))
+    return f"background-color: {background}; color: {foreground}; font-weight: 700;"
+
+
+def render_table(
+    title: str,
+    dataframe: pd.DataFrame,
+    *,
+    caption: str,
+    rows: int | None = None,
+    columns: list[str] | None = None,
+    severity_column: str | None = None,
+) -> None:
     st.markdown(f"### {title}")
-    st.caption(f"Current artifact: `{dataset.name}` | Source: `{dataset.source_name}`")
-    st.dataframe(dataset.dataframe.head(rows), width="stretch", hide_index=True)
+    st.caption(caption)
+    display_frame = _prepare_table_frame(dataframe, rows=rows, columns=columns)
+    if display_frame.empty:
+        st.info("No rows are available for this view yet.")
+        return
+    if severity_column and severity_column in display_frame.columns:
+        styled_frame = display_frame.style.map(_style_severity_value, subset=[severity_column]).hide(axis="index")
+        st.dataframe(styled_frame, width="stretch")
+        return
+    st.dataframe(display_frame, width="stretch", hide_index=True)
+
+
+def render_preview(dataset: DatasetArtifact, *, title: str = "Data Preview", rows: int = 15) -> None:
+    preview_columns = _select_priority_columns(dataset.dataframe, limit=8)
+    render_table(
+        title,
+        dataset.dataframe,
+        caption=(
+            f"Current artifact: `{dataset.name}` from `{dataset.source_name}`. "
+            f"Showing the first {min(rows, dataset.row_count):,} rows across {len(preview_columns)} priority columns."
+        ),
+        rows=rows,
+        columns=preview_columns,
+    )
 
 
 def render_profile(dataset: DatasetArtifact) -> None:
@@ -235,7 +822,6 @@ def render_profile(dataset: DatasetArtifact) -> None:
 
     summary_columns = st.columns([1.15, 1])
     with summary_columns[0]:
-        st.markdown("### Profiling Summary")
         schema_frame = pd.DataFrame(
             {
                 "column": list(profile.dtypes.keys()),
@@ -243,11 +829,18 @@ def render_profile(dataset: DatasetArtifact) -> None:
                 "missing_values": [profile.missing_values[column] for column in profile.dtypes],
             }
         )
-        st.dataframe(schema_frame, width="stretch", hide_index=True)
+        render_table(
+            "Profiling Summary",
+            schema_frame,
+            caption="Core schema fields ordered for quick review: column name, detected type, and missing-value count.",
+        )
     with summary_columns[1]:
-        st.markdown("### Summary Statistics")
         summary_frame = pd.DataFrame(profile.summary_statistics).T.reset_index().rename(columns={"index": "statistic"})
-        st.dataframe(summary_frame, width="stretch", hide_index=True)
+        render_table(
+            "Summary Statistics",
+            summary_frame,
+            caption="Reference metrics from the active profile to help you spot outliers and shape changes quickly.",
+        )
 
 
 def reset_workspace() -> None:
@@ -256,14 +849,17 @@ def reset_workspace() -> None:
     st.session_state.last_validation = None
     st.session_state.merge_preview = None
     st.session_state.generator_column_count = 4
+    st.session_state.generator_large_export_artifact = None
     st.session_state.engine.logger.clear()
     st.session_state.export_artifact = None
     st.session_state.export_context = None
+    st.session_state.page = "Dashboard"
+    st.session_state.page_selector = "Dashboard"
 
 
 def upload_phase() -> None:
-    st.markdown("## Upload Phase")
-    st.caption("CSV and XLSX only. In single mode, Excel uploads use the first worksheet. In multiple mode, all worksheets are loaded as datasets.")
+    st.markdown("## Dataset Intake")
+    st.caption("Use CSV or XLSX files. Single-dataset mode reads the first worksheet; multi-dataset mode loads every worksheet as its own dataset.")
     mode = st.session_state.mode
     accept_multiple = mode == "Multiple Dataset"
     uploaded_files = st.file_uploader(
@@ -273,17 +869,17 @@ def upload_phase() -> None:
         help="Single mode accepts one file. Multiple mode accepts several files and multi-sheet workbooks.",
     )
 
-    load_clicked = st.button("Load Dataset Files", type="primary", width="stretch")
+    load_clicked = st.button("Load Datasets", type="primary", width="stretch")
     if not load_clicked:
         return
 
     if not uploaded_files:
-        st.error("Upload at least one dataset before loading.")
+        st.error("Add at least one dataset file before loading the workspace.")
         return
 
     files = uploaded_files if isinstance(uploaded_files, list) else [uploaded_files]
     if mode == "Single Dataset" and len(files) != 1:
-        st.error("Single Dataset mode requires exactly one uploaded file.")
+        st.error("Single-dataset mode accepts exactly one uploaded file.")
         return
 
     engine: AutomationEngine = st.session_state.engine
@@ -307,13 +903,13 @@ def upload_phase() -> None:
         return
 
     if mode == "Single Dataset" and len(loaded_datasets) != 1:
-        st.error("Single Dataset mode must resolve to exactly one dataset after loading.")
+        st.error("Single-dataset mode must resolve to exactly one dataset after loading.")
         return
 
     for dataset in loaded_datasets:
         add_dataset(dataset)
 
-    st.success(f"Loaded {len(loaded_datasets)} dataset(s) into the workspace.")
+    st.success(f"Dataset intake complete. Loaded {len(loaded_datasets)} dataset(s) into the workspace.")
 
 
 def _parse_optional_numeric(value: str, *, label: str, integer: bool = False) -> float | int | None:
@@ -337,248 +933,582 @@ def _parse_optional_date(value: str, *, label: str) -> date | None:
         raise ValueError(f"{label} must be a valid date, for example 2024-01-15.") from exc
 
 
+def _generator_type_label(data_type: str) -> str:
+    labels = {
+        "integer": "Integer",
+        "float": "Float",
+        "string": "String",
+        "category": "Category",
+        "date": "Date",
+        "boolean": "Boolean",
+    }
+    return labels.get(data_type, data_type.title())
+
+
+def _default_generator_dataset_name() -> str:
+    return f"generated_dataset_{len(dataset_names()) + 1}"
+
+
+def _looks_like_identifier_column(column_name: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", column_name.strip().lower()).strip("_")
+    return bool(normalized) and any(
+        token in {"id", "identifier", "key", "uuid"}
+        for token in normalized.split("_")
+    )
+
+
+def _ensure_generator_state(column_count: int) -> None:
+    default_end = date.today()
+    default_start = default_end - timedelta(days=90)
+    pending_dataset_name = st.session_state.pop("generator_dataset_name_pending", None)
+    if pending_dataset_name is not None:
+        st.session_state.generator_dataset_name = str(pending_dataset_name)
+    elif "generator_dataset_name" not in st.session_state:
+        st.session_state.generator_dataset_name = _default_generator_dataset_name()
+    if "generator_row_count" not in st.session_state:
+        st.session_state.generator_row_count = 50
+    if "generator_use_seed" not in st.session_state:
+        st.session_state.generator_use_seed = False
+    if "generator_random_seed" not in st.session_state:
+        st.session_state.generator_random_seed = 42
+    if "generator_large_row_count" not in st.session_state:
+        st.session_state.generator_large_row_count = 100_000
+    if "generator_large_chunk_size" not in st.session_state:
+        st.session_state.generator_large_chunk_size = 50_000
+
+    for index in range(column_count):
+        defaults = {
+            f"generator_name_{index}": f"column_{index + 1}",
+            f"generator_type_{index}": "integer",
+            f"generator_primary_{index}": False,
+            f"generator_duplicates_{index}": True,
+            f"generator_min_{index}": "",
+            f"generator_max_{index}": "",
+            f"generator_sample_numeric_{index}": "",
+            f"generator_pattern_{index}": "none",
+            f"generator_sample_string_{index}": "",
+            f"generator_categories_{index}": ("A, B, C" if index == 0 else ""),
+            f"generator_sample_category_{index}": "",
+            f"generator_start_date_{index}": default_start,
+            f"generator_end_date_{index}": default_end,
+            f"generator_sample_date_{index}": "",
+            f"generator_probability_{index}": 0.5,
+            f"generator_sample_boolean_{index}": "",
+        }
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
+        if st.session_state[f"generator_primary_{index}"]:
+            st.session_state[f"generator_duplicates_{index}"] = False
+
+    if not st.session_state.get("generator_primary_defaults_migrated"):
+        for index in range(column_count):
+            column_name = str(st.session_state.get(f"generator_name_{index}", f"column_{index + 1}")).strip()
+            is_primary = bool(st.session_state.get(f"generator_primary_{index}", False))
+            allows_duplicates = bool(st.session_state.get(f"generator_duplicates_{index}", True))
+            if is_primary and not allows_duplicates and not _looks_like_identifier_column(column_name):
+                st.session_state[f"generator_primary_{index}"] = False
+                st.session_state[f"generator_duplicates_{index}"] = True
+        st.session_state.generator_primary_defaults_migrated = True
+
+
+def reset_generator_builder() -> None:
+    generator_keys = [key for key in list(st.session_state.keys()) if key.startswith("generator_")]
+    for key in generator_keys:
+        del st.session_state[key]
+    st.session_state.generator_column_count = 4
+    st.session_state.generator_large_export_artifact = None
+
+
+def _format_file_size(size_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB"]
+    size = float(size_bytes)
+    unit_index = 0
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(size)} {units[unit_index]}"
+    return f"{size:.1f} {units[unit_index]}"
+
+
+def _build_large_export_path(dataset_name: str) -> Path:
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", dataset_name.strip().lower()).strip("_") or "generated_dataset"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return GENERATED_EXPORT_DIR / f"{safe_name}_{timestamp}.csv"
+
+
+def _generator_sample_preview(index: int, data_type: str) -> str:
+    if data_type in {"integer", "float"}:
+        sample_value = str(st.session_state.get(f"generator_sample_numeric_{index}", "")).strip()
+    elif data_type == "string":
+        sample_value = str(st.session_state.get(f"generator_sample_string_{index}", "")).strip()
+    elif data_type == "category":
+        sample_value = str(st.session_state.get(f"generator_sample_category_{index}", "")).strip()
+    elif data_type == "date":
+        sample_value = str(st.session_state.get(f"generator_sample_date_{index}", "")).strip()
+    else:
+        sample_value = str(st.session_state.get(f"generator_sample_boolean_{index}", "")).strip()
+    return sample_value or "None"
+
+
+def _generator_rule_preview(index: int, data_type: str) -> str:
+    if data_type in {"integer", "float"}:
+        min_value = str(st.session_state.get(f"generator_min_{index}", "")).strip()
+        max_value = str(st.session_state.get(f"generator_max_{index}", "")).strip()
+        return f"{min_value or 'auto'} to {max_value or 'auto'}" if (min_value or max_value) else "Auto range"
+    if data_type == "string":
+        pattern = str(st.session_state.get(f"generator_pattern_{index}", "none"))
+        return "Free text" if pattern == "none" else f"{pattern.title()} pattern"
+    if data_type == "category":
+        categories = [value.strip() for value in str(st.session_state.get(f"generator_categories_{index}", "")).split(",") if value.strip()]
+        return f"{len(categories)} values" if categories else "Add category values"
+    if data_type == "date":
+        start_date = st.session_state.get(f"generator_start_date_{index}")
+        end_date = st.session_state.get(f"generator_end_date_{index}")
+        if start_date and end_date:
+            return f"{start_date.isoformat()} to {end_date.isoformat()}"
+        return "Rolling date window"
+    true_probability = float(st.session_state.get(f"generator_probability_{index}", 0.5))
+    return f"True {true_probability:.0%}"
+
+
+def _generator_uniqueness_preview(index: int) -> str:
+    if bool(st.session_state.get(f"generator_primary_{index}", False)):
+        return "Primary key"
+    if bool(st.session_state.get(f"generator_duplicates_{index}", True)):
+        return "Duplicates allowed"
+    return "Unique values"
+
+
+def _generator_status_preview(index: int, data_type: str) -> str:
+    column_name = str(st.session_state.get(f"generator_name_{index}", "")).strip()
+    if not column_name:
+        return "Needs name"
+    if data_type == "category":
+        categories = [value.strip() for value in str(st.session_state.get(f"generator_categories_{index}", "")).split(",") if value.strip()]
+        if not categories:
+            return "Needs categories"
+    if data_type == "date":
+        start_date = st.session_state.get(f"generator_start_date_{index}")
+        end_date = st.session_state.get(f"generator_end_date_{index}")
+        if start_date and end_date and start_date > end_date:
+            return "Check range"
+    if bool(st.session_state.get(f"generator_primary_{index}", False)):
+        return "Primary key"
+    if not bool(st.session_state.get(f"generator_duplicates_{index}", True)):
+        return "Unique values"
+    return "Ready"
+
+
+def _build_generator_schema_summary(column_count: int) -> pd.DataFrame:
+    rows: list[dict[str, str]] = []
+    for index in range(column_count):
+        data_type = str(st.session_state.get(f"generator_type_{index}", "integer"))
+        column_name = str(st.session_state.get(f"generator_name_{index}", f"column_{index + 1}")).strip() or "Untitled"
+        rows.append(
+            {
+                "Column": f"{index + 1}",
+                "Name": column_name,
+                "Type": _generator_type_label(data_type),
+                "Uniqueness": _generator_uniqueness_preview(index),
+                "Rule": _generator_rule_preview(index, data_type),
+                "Reference": _generator_sample_preview(index, data_type),
+                "Status": _generator_status_preview(index, data_type),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _collect_generator_column_configs(column_count: int) -> list[dict[str, object]]:
+    column_configs: list[dict[str, object]] = []
+    for index in range(column_count):
+        primary_key = bool(st.session_state.get(f"generator_primary_{index}", False))
+        allow_duplicates = False if primary_key else bool(st.session_state.get(f"generator_duplicates_{index}", True))
+        data_type = str(st.session_state.get(f"generator_type_{index}", "integer"))
+        column_configs.append(
+            {
+                "name": str(st.session_state.get(f"generator_name_{index}", f"column_{index + 1}")).strip(),
+                "data_type": data_type,
+                "allow_duplicates": allow_duplicates,
+                "primary_key": primary_key,
+                "min_input": str(st.session_state.get(f"generator_min_{index}", "")),
+                "max_input": str(st.session_state.get(f"generator_max_{index}", "")),
+                "sample_input": (
+                    str(st.session_state.get(f"generator_sample_numeric_{index}", ""))
+                    if data_type in {"integer", "float"}
+                    else str(st.session_state.get(f"generator_sample_string_{index}", ""))
+                    if data_type == "string"
+                    else str(st.session_state.get(f"generator_sample_category_{index}", ""))
+                    if data_type == "category"
+                    else str(st.session_state.get(f"generator_sample_date_{index}", ""))
+                ),
+                "boolean_sample": str(st.session_state.get(f"generator_sample_boolean_{index}", "")),
+                "category_input": str(st.session_state.get(f"generator_categories_{index}", "")),
+                "pattern": str(st.session_state.get(f"generator_pattern_{index}", "none")),
+                "start_date": st.session_state.get(f"generator_start_date_{index}"),
+                "end_date": st.session_state.get(f"generator_end_date_{index}"),
+                "true_probability": float(st.session_state.get(f"generator_probability_{index}", 0.5)),
+            }
+        )
+    return column_configs
+
+
+def _build_generation_request_from_state(*, row_count: int, column_count: int) -> DatasetGenerationRequest:
+    column_configs = _collect_generator_column_configs(column_count)
+    column_schemas: list[GeneratedColumnSchema] = []
+    for index, column_config in enumerate(column_configs, start=1):
+        data_type = str(column_config["data_type"])
+        column_name = str(column_config["name"]).strip()
+        min_value = _parse_optional_numeric(
+            str(column_config["min_input"]),
+            label=f"Minimum value for column '{column_name or index}'",
+            integer=(data_type == "integer"),
+        )
+        max_value = _parse_optional_numeric(
+            str(column_config["max_input"]),
+            label=f"Maximum value for column '{column_name or index}'",
+            integer=(data_type == "integer"),
+        )
+        if data_type in {"integer", "float"}:
+            sample_value = _parse_optional_numeric(
+                str(column_config["sample_input"]),
+                label=f"Sample value for column '{column_name or index}'",
+                integer=(data_type == "integer"),
+            )
+        elif data_type == "date":
+            sample_value = _parse_optional_date(
+                str(column_config["sample_input"]),
+                label=f"Sample date for column '{column_name or index}'",
+            )
+        elif data_type == "boolean":
+            boolean_sample = str(column_config["boolean_sample"])
+            sample_value = None if not boolean_sample else (boolean_sample == "True")
+        else:
+            sample_value = str(column_config["sample_input"]).strip() or None
+        categories = [value.strip() for value in str(column_config["category_input"]).split(",") if value.strip()]
+        column_schemas.append(
+            GeneratedColumnSchema(
+                name=column_name,
+                data_type=data_type,
+                allow_duplicates=bool(column_config["allow_duplicates"]),
+                primary_key=bool(column_config["primary_key"]),
+                sample_value=sample_value,
+                min_value=min_value,
+                max_value=max_value,
+                categories=categories,
+                pattern=str(column_config["pattern"]) if data_type == "string" else None,
+                start_date=column_config["start_date"],
+                end_date=column_config["end_date"],
+                true_probability=float(column_config["true_probability"]),
+            )
+        )
+    return DatasetGenerationRequest(
+        dataset_name=str(st.session_state.generator_dataset_name).strip(),
+        row_count=int(row_count),
+        columns=column_schemas,
+        random_seed=(int(st.session_state.generator_random_seed) if st.session_state.generator_use_seed else None),
+    )
+
+
 def generator_phase() -> None:
     st.markdown("## Data Generator")
     st.caption(
-        "Define a schema, generate up to 500 rows, and add the result directly to the active workspace. "
-        "Generated datasets move through the same profiling, cleaning, validation, merge, analytics, and export pipeline as uploaded files."
+        "Build a schema in a cleaner workspace, keep required settings visible, and open optional rules only when you need them. "
+        "Generated datasets move through the same cleaning, validation, merge, analytics, and export pipeline as uploaded files."
     )
 
-    generator_controls = st.columns([0.95, 0.7, 0.7, 1.15])
+    column_count = int(st.session_state.generator_column_count)
+    _ensure_generator_state(column_count)
+    generator_success_message = st.session_state.pop("generator_success_message", None)
+    schema_summary = _build_generator_schema_summary(column_count)
+    unique_columns = int((schema_summary["Uniqueness"] != "Duplicates allowed").sum()) if not schema_summary.empty else 0
+    reference_columns = int((schema_summary["Reference"] != "None").sum()) if not schema_summary.empty else 0
+
+    render_stage_header("Schema Builder", "Adjust the schema size, scan the builder summary, and open only the columns that need detailed configuration.")
+    if generator_success_message:
+        st.success(generator_success_message)
+    generator_controls = st.columns([0.95, 0.7, 0.7, 0.8, 1.1])
     with generator_controls[0]:
-        st.markdown(f"**Schema Columns:** `{st.session_state.generator_column_count}`")
+        render_metric_card("Schema Columns", f"{column_count:,}", "Current columns in the generator schema")
     with generator_controls[1]:
         if st.button("Add Column", width="stretch"):
-            st.session_state.generator_column_count = min(st.session_state.generator_column_count + 1, 30)
+            st.session_state.generator_column_count = min(column_count + 1, 30)
+            st.rerun()
     with generator_controls[2]:
-        if st.button("Remove Column", width="stretch", disabled=(st.session_state.generator_column_count <= 1)):
-            st.session_state.generator_column_count = max(st.session_state.generator_column_count - 1, 1)
+        if st.button("Remove Column", width="stretch", disabled=(column_count <= 1)):
+            st.session_state.generator_column_count = max(column_count - 1, 1)
+            st.rerun()
     with generator_controls[3]:
-        configured_count = st.number_input(
+        if st.button("Reset Builder", width="stretch"):
+            reset_generator_builder()
+            st.rerun()
+    with generator_controls[4]:
+        st.number_input(
             "Total Schema Columns",
             min_value=1,
             max_value=30,
-            value=int(st.session_state.generator_column_count),
             step=1,
-            help="Increase this when you need more than the default four generated columns.",
-        )
-        st.session_state.generator_column_count = int(configured_count)
-
-    suggested_name = f"generated_dataset_{len(dataset_names()) + 1}"
-    with st.form("generator_form"):
-        top_controls = st.columns([1.2, 0.8, 0.8, 0.8])
-        with top_controls[0]:
-            dataset_name = st.text_input("Dataset Name", value=suggested_name)
-        with top_controls[1]:
-            row_count = st.number_input("Rows", min_value=1, max_value=500, value=50, step=1)
-        with top_controls[2]:
-            st.metric("Columns", st.session_state.generator_column_count)
-        with top_controls[3]:
-            use_seed = st.checkbox("Use Random Seed", value=False)
-            random_seed = st.number_input("Seed", min_value=0, value=42, step=1, disabled=not use_seed)
-
-        st.caption(
-            "Supported types: integer, float, string, category, date, boolean. "
-            "Use `Primary Identifier` or disable duplicates when a column must be unique. "
-            "Each column also supports a sample value so generated data can follow a real example."
+            key="generator_column_count",
+            help="Increase this when the schema needs more than the default four columns.",
         )
 
-        column_configs: list[dict[str, object]] = []
-        for index in range(int(st.session_state.generator_column_count)):
-            with st.expander(f"Column {index + 1}", expanded=(index < 3)):
-                identity_columns = st.columns([1.2, 1, 0.8, 0.9])
+    schema_metrics = st.columns(3)
+    with schema_metrics[0]:
+        render_metric_card("Unique Columns", f"{unique_columns:,}", "Primary keys and duplicate-free fields")
+    with schema_metrics[1]:
+        render_metric_card("Reference Columns", f"{reference_columns:,}", "Columns using sample values to shape output")
+    with schema_metrics[2]:
+        render_metric_card("Row Limit", "500 max", "Generator safeguard for quick iteration")
+
+    render_table(
+        "Schema Summary",
+        schema_summary,
+        caption="Scan the generator plan before opening column editors. Status highlights anything that still needs attention.",
+    )
+
+    render_stage_header("Required Setup", "Start with the dataset identity and row volume. Optional controls stay out of the way until needed.")
+    top_controls = st.columns([1.25, 0.75, 0.8])
+    with top_controls[0]:
+        st.text_input("Dataset Name", key="generator_dataset_name")
+    with top_controls[1]:
+        st.number_input("Rows", min_value=1, max_value=500, step=1, key="generator_row_count")
+    with top_controls[2]:
+        render_workspace_card("Schema Width", f"{int(st.session_state.generator_column_count):,} columns", "Adjust the column count above")
+
+    with st.expander("Optional Generation Controls", expanded=False):
+        optional_controls = st.columns([0.7, 0.8, 1.5])
+        with optional_controls[0]:
+            st.checkbox("Use Random Seed", key="generator_use_seed")
+        with optional_controls[1]:
+            st.number_input("Seed", min_value=0, step=1, key="generator_random_seed", disabled=not st.session_state.generator_use_seed)
+        with optional_controls[2]:
+            st.caption(
+                "Use a random seed when you want repeatable output across runs. Leave it off when you want fresh variation each time."
+            )
+
+    render_stage_header("Column Builder", "Required fields stay on the first tab. Optional rules handle ranges, categories, patterns, dates, and sample guidance.")
+    st.caption(
+        "Supported types: integer, float, string, category, date, boolean. "
+        "Use `Primary Identifier` for a stable key column, or disable duplicates when a field needs unique values."
+    )
+
+    for index in range(column_count):
+        data_type = str(st.session_state.get(f"generator_type_{index}", "integer"))
+        column_name = str(st.session_state.get(f"generator_name_{index}", f"column_{index + 1}")).strip() or f"column_{index + 1}"
+        status = _generator_status_preview(index, data_type)
+        expander_label = f"Column {index + 1} | {column_name} | {_generator_type_label(data_type)} | {status}"
+        with st.expander(expander_label, expanded=(index == 0)):
+            required_tab, optional_tab = st.tabs(["Required", "Optional Rules"])
+            with required_tab:
+                identity_columns = st.columns([1.25, 1, 0.85, 0.9])
                 with identity_columns[0]:
-                    column_name = st.text_input("Column Name", key=f"generator_name_{index}", value=f"column_{index + 1}")
+                    st.text_input("Column Name", key=f"generator_name_{index}")
                 with identity_columns[1]:
-                    data_type = st.selectbox(
+                    st.selectbox(
                         "Type",
                         options=["integer", "float", "string", "category", "date", "boolean"],
                         key=f"generator_type_{index}",
+                        format_func=_generator_type_label,
                     )
                 with identity_columns[2]:
-                    primary_key = st.checkbox("Primary Identifier", key=f"generator_primary_{index}", value=(index == 0))
+                    st.checkbox("Primary Identifier", key=f"generator_primary_{index}")
+                if st.session_state.get(f"generator_primary_{index}", False):
+                    st.session_state[f"generator_duplicates_{index}"] = False
                 with identity_columns[3]:
-                    allow_duplicates = st.checkbox(
+                    st.checkbox(
                         "Allow Duplicates",
                         key=f"generator_duplicates_{index}",
-                        value=not primary_key,
-                        disabled=primary_key,
+                        disabled=bool(st.session_state.get(f"generator_primary_{index}", False)),
                     )
+                st.caption(
+                    f"Uniqueness: {_generator_uniqueness_preview(index)} | Current rule: {_generator_rule_preview(index, str(st.session_state.get(f'generator_type_{index}', data_type)))}"
+                )
 
-                min_input = ""
-                max_input = ""
-                sample_input = ""
-                category_input = ""
-                pattern = "none"
-                start_date = None
-                end_date = None
-                true_probability = 0.5
-                boolean_sample = ""
-
-                if data_type in {"integer", "float"}:
+            current_type = str(st.session_state.get(f"generator_type_{index}", data_type))
+            with optional_tab:
+                if current_type in {"integer", "float"}:
                     numeric_columns = st.columns(3)
                     with numeric_columns[0]:
-                        min_input = st.text_input("Minimum Value", key=f"generator_min_{index}")
+                        st.text_input("Minimum Value", key=f"generator_min_{index}")
                     with numeric_columns[1]:
-                        max_input = st.text_input("Maximum Value", key=f"generator_max_{index}")
+                        st.text_input("Maximum Value", key=f"generator_max_{index}")
                     with numeric_columns[2]:
-                        sample_input = st.text_input(
+                        st.text_input(
                             "Sample Value",
                             key=f"generator_sample_numeric_{index}",
-                            help="Example numeric value used as a reference during generation.",
+                            help="Optional example value used to shape generated output around a realistic reference.",
                         )
-                elif data_type == "string":
-                    string_columns = st.columns(2)
+                    st.caption("Optional range rules are useful when the column should stay inside a known numeric band.")
+                elif current_type == "string":
+                    string_columns = st.columns([0.9, 1.1])
                     with string_columns[0]:
-                        pattern = st.selectbox(
+                        st.selectbox(
                             "Pattern",
                             options=["none", "email", "phone", "name", "company"],
                             key=f"generator_pattern_{index}",
-                            help="Email and phone enforce realistic contact formats. Name and company use faker-style records.",
+                            help="Choose a pattern when generated strings should follow a business-friendly format.",
                         )
                     with string_columns[1]:
-                        sample_input = st.text_input(
+                        st.text_input(
                             "Sample Value",
                             key=f"generator_sample_string_{index}",
-                            help="Example text used to shape the generated values.",
+                            help="Optional example text to steer the generated values toward a recognizable style.",
                         )
-                elif data_type == "category":
-                    category_columns = st.columns(2)
+                elif current_type == "category":
+                    category_columns = st.columns([1.2, 0.8])
                     with category_columns[0]:
-                        category_input = st.text_input(
+                        st.text_input(
                             "Category Values",
                             key=f"generator_categories_{index}",
-                            value="A, B, C" if index == 0 else "",
-                            help="Comma-separated category values.",
+                            help=(
+                                "Comma-separated category values used as the allowed set for this field. "
+                                "You can enter labels directly like `male, female` or coded mappings like "
+                                "`1=male, 2=female`; generated output uses the category labels."
+                            ),
                         )
                     with category_columns[1]:
-                        sample_input = st.text_input(
+                        st.text_input(
                             "Sample Category",
                             key=f"generator_sample_category_{index}",
-                            help="Example category value to include in the generated output.",
+                            help="Optional example category to anchor the distribution. For mapped values, you can enter either the code or the label.",
                         )
-                elif data_type == "date":
+                elif current_type == "date":
                     date_columns = st.columns(3)
-                    default_end = date.today()
-                    default_start = default_end - timedelta(days=90)
                     with date_columns[0]:
-                        start_date = st.date_input("Start Date", key=f"generator_start_date_{index}", value=default_start)
+                        st.date_input("Start Date", key=f"generator_start_date_{index}")
                     with date_columns[1]:
-                        end_date = st.date_input("End Date", key=f"generator_end_date_{index}", value=default_end)
+                        st.date_input("End Date", key=f"generator_end_date_{index}")
                     with date_columns[2]:
-                        sample_input = st.text_input(
+                        st.text_input(
                             "Sample Date",
                             key=f"generator_sample_date_{index}",
                             placeholder="2024-01-15",
-                            help="Optional example date used to anchor generated dates.",
+                            help="Optional example date used to anchor the generated window.",
                         )
-                elif data_type == "boolean":
-                    boolean_columns = st.columns(2)
+                elif current_type == "boolean":
+                    boolean_columns = st.columns([0.9, 0.7])
                     with boolean_columns[0]:
-                        true_probability = st.slider(
+                        st.slider(
                             "True Probability",
                             min_value=0.0,
                             max_value=1.0,
-                            value=0.5,
                             step=0.05,
                             key=f"generator_probability_{index}",
                         )
                     with boolean_columns[1]:
-                        boolean_sample = st.selectbox(
+                        st.selectbox(
                             "Sample Value",
                             options=["", "True", "False"],
                             key=f"generator_sample_boolean_{index}",
-                            help="Optional example boolean value to seed the generated column.",
+                            help="Optional example value that nudges the generated boolean series.",
                         )
-
-                column_configs.append(
-                    {
-                        "name": column_name.strip(),
-                        "data_type": data_type,
-                        "allow_duplicates": (False if primary_key else allow_duplicates),
-                        "primary_key": primary_key,
-                        "min_input": min_input,
-                        "max_input": max_input,
-                        "sample_input": sample_input,
-                        "boolean_sample": boolean_sample,
-                        "category_input": category_input,
-                        "pattern": pattern,
-                        "start_date": start_date,
-                        "end_date": end_date,
-                        "true_probability": true_probability,
-                    }
+                st.caption(
+                    f"Reference value: {_generator_sample_preview(index, current_type)} | Status: {_generator_status_preview(index, current_type)}"
                 )
 
-        submitted = st.form_submit_button("Generate Dataset", type="primary")
+    generate_clicked = st.button("Generate Dataset", type="primary", width="stretch")
 
-    if submitted:
+    if generate_clicked:
         try:
-            column_schemas: list[GeneratedColumnSchema] = []
-            for index, column_config in enumerate(column_configs, start=1):
-                data_type = str(column_config["data_type"])
-                column_name = str(column_config["name"]).strip()
-                min_value = _parse_optional_numeric(
-                    str(column_config["min_input"]),
-                    label=f"Minimum value for column '{column_name or index}'",
-                    integer=(data_type == "integer"),
-                )
-                max_value = _parse_optional_numeric(
-                    str(column_config["max_input"]),
-                    label=f"Maximum value for column '{column_name or index}'",
-                    integer=(data_type == "integer"),
-                )
-                if data_type in {"integer", "float"}:
-                    sample_value = _parse_optional_numeric(
-                        str(column_config["sample_input"]),
-                        label=f"Sample value for column '{column_name or index}'",
-                        integer=(data_type == "integer"),
-                    )
-                elif data_type == "date":
-                    sample_value = _parse_optional_date(
-                        str(column_config["sample_input"]),
-                        label=f"Sample date for column '{column_name or index}'",
-                    )
-                elif data_type == "boolean":
-                    boolean_sample = str(column_config["boolean_sample"])
-                    sample_value = None if not boolean_sample else (boolean_sample == "True")
-                else:
-                    sample_value = str(column_config["sample_input"]).strip() or None
-                categories = [value.strip() for value in str(column_config["category_input"]).split(",") if value.strip()]
-                column_schemas.append(
-                    GeneratedColumnSchema(
-                        name=column_name,
-                        data_type=data_type,
-                        allow_duplicates=bool(column_config["allow_duplicates"]),
-                        primary_key=bool(column_config["primary_key"]),
-                        sample_value=sample_value,
-                        min_value=min_value,
-                        max_value=max_value,
-                        categories=categories,
-                        pattern=str(column_config["pattern"]) if data_type == "string" else None,
-                        start_date=column_config["start_date"],
-                        end_date=column_config["end_date"],
-                        true_probability=float(column_config["true_probability"]),
-                    )
-                )
-            generation_request = DatasetGenerationRequest(
-                dataset_name=dataset_name.strip(),
-                row_count=int(row_count),
-                columns=column_schemas,
-                random_seed=int(random_seed) if use_seed else None,
+            generation_request = _build_generation_request_from_state(
+                row_count=int(st.session_state.generator_row_count),
+                column_count=column_count,
             )
             generated_dataset = st.session_state.engine.generate_dataset(generation_request)
             add_dataset(generated_dataset)
-            st.success(
+            st.session_state.generator_dataset_name_pending = _default_generator_dataset_name()
+            st.session_state.generator_success_message = (
                 f"Generated dataset `{generated_dataset.name}` with {generated_dataset.row_count} rows and "
                 f"{generated_dataset.column_count} columns."
+            )
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+        except DataAutomationError as exc:
+            st.error(str(exc))
+
+    render_stage_header(
+        "Production-Scale Export",
+        "Use the same schema to build a file-first CSV export up to 1,000,000 rows without loading the full dataset into the live workspace.",
+    )
+    export_controls = st.columns([1.0, 0.9, 0.95, 1.1])
+    with export_controls[0]:
+        st.number_input(
+            "Export Rows",
+            min_value=501,
+            max_value=1_000_000,
+            step=10_000,
+            key="generator_large_row_count",
+            help="Large export mode is optimized for file delivery rather than in-app editing.",
+        )
+    with export_controls[1]:
+        st.selectbox(
+            "Chunk Size",
+            options=[10_000, 25_000, 50_000, 100_000, 200_000],
+            key="generator_large_chunk_size",
+            format_func=lambda value: f"{value:,} rows",
+            help="Larger chunks write faster, while smaller chunks reduce peak memory usage.",
+        )
+    with export_controls[2]:
+        render_workspace_card("Delivery Mode", "CSV export", "Generated in chunks and kept out of the interactive workspace")
+    with export_controls[3]:
+        build_large_export = st.button("Build Large CSV Export", width="stretch")
+
+    st.caption(
+        "This mode is intended for production-scale synthetic data delivery. "
+        "The file is generated in chunks, written to disk, and made available for download without loading all rows into Streamlit session memory."
+    )
+
+    if build_large_export:
+        try:
+            large_request = _build_generation_request_from_state(
+                row_count=int(st.session_state.generator_large_row_count),
+                column_count=column_count,
+            )
+            export_artifact = st.session_state.engine.generate_large_dataset_export(
+                large_request,
+                output_path=_build_large_export_path(large_request.dataset_name),
+                chunk_size=int(st.session_state.generator_large_chunk_size),
+            )
+            st.session_state.generator_large_export_artifact = export_artifact
+            st.success(
+                f"Large CSV export ready. `{export_artifact.file_name}` contains {export_artifact.row_count:,} rows "
+                f"and was written in {export_artifact.chunk_count:,} chunk(s)."
             )
         except ValueError as exc:
             st.error(str(exc))
         except DataAutomationError as exc:
             st.error(str(exc))
 
+    large_export_artifact: GeneratedFileArtifact | None = st.session_state.generator_large_export_artifact
+    if large_export_artifact is not None and large_export_artifact.file_path.exists():
+        export_summary_columns = st.columns(4)
+        with export_summary_columns[0]:
+            render_metric_card("Export Rows", f"{large_export_artifact.row_count:,}", "Generated rows in the current file-first export")
+        with export_summary_columns[1]:
+            render_metric_card("Columns", f"{large_export_artifact.column_count:,}", "Schema width written to the export")
+        with export_summary_columns[2]:
+            render_metric_card("File Size", _format_file_size(large_export_artifact.file_size_bytes), "Current CSV size on disk")
+        with export_summary_columns[3]:
+            render_metric_card("Chunks", f"{large_export_artifact.chunk_count:,}", "Write batches used during generation")
+
+        with large_export_artifact.file_path.open("rb") as export_handle:
+            st.download_button(
+                "Download Large CSV Export",
+                data=export_handle,
+                file_name=large_export_artifact.file_name,
+                mime=large_export_artifact.mime_type,
+                width="stretch",
+            )
+        st.caption(
+            f"Saved locally at `{large_export_artifact.file_path}`. "
+            "This export is file-first and is not added to the active workspace dataset list."
+        )
+
     selected = get_selected_dataset()
     if selected and selected.source_type == "generated":
+        render_stage_header("Generated Output", "Download the generated artifact immediately, then continue through the rest of the workflow.")
         st.markdown("### Generated Dataset Downloads")
         csv_artifact = st.session_state.engine.exporter.export(selected, file_format="csv")
         xlsx_artifact = st.session_state.engine.exporter.export(selected, file_format="xlsx")
@@ -602,24 +1532,65 @@ def generator_phase() -> None:
 
 
 def render_dashboard() -> None:
-    st.markdown(
-        """
-        <div class="hero">
-            <h1>Initialize Workflow</h1>
-            <p>Select whether you want to upload a dataset or generate one from a structured schema, then move it through the same profiling, cleaning, filtering, validation, transformation, merging, analytics, and export workflow.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    render_module_shell(
+        "Dashboard",
+        "Run the workspace from one command center: set the input path, confirm the active dataset, and hand off into the next module with clear session context.",
     )
+    summary = _workspace_summary()
+    records = summary["records"]
+    status_label = escape(str(summary["status_label"]))
+    status_detail = escape(str(summary["status_detail"]))
+    mode_label = str(summary["mode_label"])
+    mode_detail = str(summary["mode_detail"])
+
+    render_stage_header("Workspace Command Center", "Set the workspace path, review current status, and move the active dataset into the next step.")
+
+    hero_columns = st.columns([1.3, 0.9])
+    with hero_columns[0]:
+        st.markdown(
+            """
+            <div class="dashboard-hero">
+                <h3>Command Center</h3>
+                <p>Use this page to define how data enters the workspace, confirm the active artifact, and move directly into cleaning, validation, transformation, analytics, or export without scanning raw utility screens.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with hero_columns[1]:
+        st.markdown(
+            f"""
+            <div class="dashboard-note">
+                <div class="dashboard-note-label">Workspace Status</div>
+                <div class="dashboard-note-value">{status_label}</div>
+                <div class="dashboard-note-copy">{status_detail}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     input_mode = st.radio(
-        "Select Mode",
+        "Input Path",
         options=["Upload Dataset", "Generate Dataset"],
         horizontal=True,
-        index=0 if st.session_state.input_mode == "Upload Dataset" else 1,
+        key="input_mode",
     )
-    st.session_state.input_mode = input_mode
 
+    status_columns = st.columns(4)
+    with status_columns[0]:
+        render_metric_card("Datasets in Workspace", f"{int(summary['dataset_count']):,}", "Loaded artifacts available for downstream modules")
+    with status_columns[1]:
+        render_metric_card("Session Events", f"{int(summary['record_count']):,}", "Operations recorded in the current audit trail")
+    with status_columns[2]:
+        render_metric_card("Current Mode", mode_label, mode_detail)
+    with status_columns[3]:
+        last_record = summary["last_record"]
+        render_metric_card(
+            "Latest Update",
+            (_format_timestamp(last_record.timestamp) if last_record else "No activity yet"),
+            (last_record.operation_name if last_record else "The workspace has not executed any operations."),
+        )
+
+    render_stage_header("Workspace Actions", "Choose how the workspace receives data, then activate the dataset you want to operate on.")
     if input_mode == "Upload Dataset":
         mode = st.radio(
             "Workspace Scope",
@@ -640,31 +1611,113 @@ def render_dashboard() -> None:
 
     selected = get_selected_dataset()
     if not selected:
-        st.info("No datasets loaded yet. Upload a file above, generate a dataset from schema, or use the sample CSV files in `sample_data/`.")
+        st.info("No datasets are active yet. Load a file above, generate a dataset from schema, or use the sample files in `sample_data/`.")
         return
 
-    dataset_options = dataset_names()
-    if dataset_options:
-        selected_name = st.selectbox("Active Dataset", options=dataset_options, index=dataset_options.index(st.session_state.selected_dataset))
-        st.session_state.selected_dataset = selected_name
-        selected = st.session_state.datasets[selected_name]
+    profile = st.session_state.engine.profile(selected)
+    missing_total = sum(profile.missing_values.values())
+    preview_columns = _select_priority_columns(selected.dataframe, limit=8)
+    schema_frame = pd.DataFrame(
+        {
+            "column": list(profile.dtypes.keys()),
+            "dtype": list(profile.dtypes.values()),
+            "missing": [profile.missing_values[column] for column in profile.dtypes],
+        }
+    ).head(10)
 
-    render_profile(selected)
-    render_preview(selected)
+    render_stage_header("Active Workspace", "Keep the selected dataset in view, inspect the health summary, and move into the next operational module.")
 
-    if st.session_state.engine.logger.list_records():
-        st.markdown("### Recent Operations")
-        recent_records = pd.DataFrame(record.to_dict() for record in st.session_state.engine.logger.list_records()[-8:])
-        st.dataframe(recent_records, width="stretch", hide_index=True)
+    dataset_control_columns = st.columns([1.1, 0.9])
+    with dataset_control_columns[0]:
+        dataset_options = dataset_names()
+        if dataset_options:
+            selected_name = st.selectbox(
+                "Active Dataset",
+                options=dataset_options,
+                index=dataset_options.index(st.session_state.selected_dataset),
+            )
+            st.session_state.selected_dataset = selected_name
+            selected = st.session_state.datasets[selected_name]
+            profile = st.session_state.engine.profile(selected)
+            missing_total = sum(profile.missing_values.values())
+            preview_columns = _select_priority_columns(selected.dataframe, limit=8)
+            schema_frame = pd.DataFrame(
+                {
+                    "column": list(profile.dtypes.keys()),
+                    "dtype": list(profile.dtypes.values()),
+                    "missing": [profile.missing_values[column] for column in profile.dtypes],
+                }
+            ).head(10)
+    with dataset_control_columns[1]:
+        st.markdown(
+            f"""
+            <div class="dashboard-note">
+                <div class="dashboard-note-label">Active Dataset</div>
+                <div class="dashboard-note-value">{escape(selected.name)}</div>
+                <div class="dashboard-note-copy">Source: {escape(selected.source_name)} | Type: {escape(selected.source_type.upper())}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    metric_columns = st.columns(4)
+    with metric_columns[0]:
+        render_metric_card("Rows", f"{profile.row_count:,}", "Records currently in the active dataset")
+    with metric_columns[1]:
+        render_metric_card("Columns", f"{profile.column_count:,}", "Fields currently available for analysis")
+    with metric_columns[2]:
+        render_metric_card("Missing Cells", f"{missing_total:,}", "Tracked null or empty values")
+    with metric_columns[3]:
+        render_metric_card("Duplicate Rows", f"{profile.duplicate_rows:,}", "Exact duplicates found in the active dataset")
+
+    focus_columns = st.columns([1.05, 0.95])
+    with focus_columns[0]:
+        render_table(
+            "Schema Snapshot",
+            schema_frame,
+            caption="Key fields in the active dataset, prioritized for structure review before deeper workflow steps.",
+        )
+    with focus_columns[1]:
+        st.markdown("### Next Modules")
+        st.caption("Move directly into the next workflow step from the command center.")
+        quick_action_columns = st.columns(2)
+        for index, page in enumerate(QUICK_ACTIONS):
+            with quick_action_columns[index % 2]:
+                if st.button(f"Open {page}", key=f"dashboard_quick_{page}", width="stretch"):
+                    _set_page(page)
+                st.caption(PAGE_DESCRIPTIONS[page])
+
+    render_stage_header("Dataset Preview", "Review the first rows of the highest-priority visible columns before running downstream actions.")
+    render_table(
+        "Workspace Preview",
+        selected.dataframe,
+        caption=f"Previewing {len(preview_columns)} priority columns: {', '.join(preview_columns)}",
+        rows=12,
+        columns=preview_columns,
+    )
+
+    render_stage_header("Recent Activity", "Track the latest operations and their resulting datasets without leaving the command center.")
+    if records:
+        render_table(
+            "Recent Activity",
+            _recent_activity_frame(records, limit=8),
+            caption="Latest workspace events with the resulting dataset kept in view for quick traceability.",
+        )
+    else:
+        st.info("No workspace events are recorded yet. Uploads, generation, cleaning, validation, and export actions will appear here.")
 
 
 def render_cleaning() -> None:
     dataset = get_selected_dataset()
-    st.markdown("## Cleaning")
+    render_module_shell(
+        "Cleaning",
+        "Apply controlled data quality operations such as duplicate removal and missing-value treatment while preserving an auditable artifact trail.",
+    )
     if not dataset:
         st.info("Load a dataset before using cleaning operations.")
         return
 
+    render_stage_header("Configure Cleaning", "Select the quality operations to apply to the active dataset.")
     with st.form("cleaning_form"):
         remove_duplicates = st.checkbox("Remove duplicate rows")
         duplicate_subset = st.multiselect("Duplicate key columns", options=list(dataset.dataframe.columns))
@@ -690,24 +1743,29 @@ def render_cleaning() -> None:
                     fill_value=fill_value if missing_method == "constant" else None,
                 )
             if working_dataset is dataset:
-                st.warning("No cleaning operation was selected.")
+                st.warning("No cleaning changes were selected, so the active dataset was left unchanged.")
             else:
                 replace_dataset(dataset.name, working_dataset)
-                st.success("Cleaning completed successfully.")
+                st.success("Cleaning complete. The active dataset now reflects the selected quality rules.")
         except DataAutomationError as exc:
             st.error(str(exc))
 
+    render_stage_header("Cleaning Results", "Inspect the updated profile and sample records after the cleaning step.")
     render_profile(get_selected_dataset())
     render_preview(get_selected_dataset(), title="Cleaned Dataset Preview")
 
 
 def render_filtering() -> None:
     dataset = get_selected_dataset()
-    st.markdown("## Filtering")
+    render_module_shell(
+        "Filtering",
+        "Narrow the working dataset with structured conditions so the downstream workflow operates only on the records you intend to keep.",
+    )
     if not dataset:
         st.info("Load a dataset before using filtering.")
         return
 
+    render_stage_header("Configure Filters", "Define one or more filter conditions to shape the active dataset.")
     condition_count = st.number_input("Number of filter conditions", min_value=1, max_value=5, value=1, step=1)
     conditions: list[FilterCondition] = []
     for index in range(int(condition_count)):
@@ -731,20 +1789,25 @@ def render_filtering() -> None:
         try:
             filtered = st.session_state.engine.filter_rows(dataset, conditions)
             replace_dataset(dataset.name, filtered)
-            st.success("Filtering completed successfully.")
+            st.success("Filtering complete. The active dataset now contains only the records that matched the active conditions.")
         except DataAutomationError as exc:
             st.error(str(exc))
 
+    render_stage_header("Filtering Results", "Review the remaining records after the active filters are applied.")
     render_preview(get_selected_dataset(), title="Filtered Dataset Preview")
 
 
 def render_validation() -> None:
     dataset = get_selected_dataset()
-    st.markdown("## Validation")
+    render_module_shell(
+        "Validation",
+        "Run targeted data checks across types, ranges, schema alignment, and outlier behavior to surface risk before transformation or export.",
+    )
     if not dataset:
         st.info("Load a dataset before using validation.")
         return
 
+    render_stage_header("Configure Validation", "Select the checks you want the engine to run against the active dataset.")
     numeric_columns = list(dataset.dataframe.select_dtypes(include="number").columns)
     schema_reference_options = [name for name in dataset_names() if name != dataset.name]
     with st.form("validation_form"):
@@ -792,14 +1855,15 @@ def render_validation() -> None:
             )
             st.session_state.last_validation = report
             if report.has_errors:
-                st.error("Validation completed with errors.")
+                st.error("Validation finished with blocking issues. Review the flagged rows and fields before continuing.")
             else:
-                st.success("Validation completed.")
+                st.success("Validation finished. No blocking issues were detected for the active dataset.")
         except DataAutomationError as exc:
             st.error(str(exc))
 
     report = st.session_state.last_validation
     if report and report.dataset_name == dataset.name:
+        render_stage_header("Validation Results", "Review the issue summary and inspect any blocking or warning-level findings.")
         summary = report.summary()
         summary_columns = st.columns(3)
         with summary_columns[0]:
@@ -817,17 +1881,26 @@ def render_validation() -> None:
                 "details": [issue.details for issue in report.issues],
             }
         )
-        st.dataframe(issues_frame, width="stretch", hide_index=True)
+        render_table(
+            "Validation Findings",
+            issues_frame,
+            caption="Severity is styled so blocking findings stand out before you move to transformation, analytics, or export.",
+            severity_column="severity",
+        )
     render_preview(dataset, title="Validated Dataset Preview")
 
 
 def render_transformation() -> None:
     dataset = get_selected_dataset()
-    st.markdown("## Transformation")
+    render_module_shell(
+        "Transformation",
+        "Reshape the active dataset through column selection, renaming, derivation, and controlled type conversion.",
+    )
     if not dataset:
         st.info("Load a dataset before using transformations.")
         return
 
+    render_stage_header("Configure Transformations", "Choose the structural changes to apply to the active dataset.")
     with st.form("transform_form"):
         selected_columns = st.multiselect("Select columns to retain", options=list(dataset.dataframe.columns), default=list(dataset.dataframe.columns))
         rename_targets = st.multiselect("Columns to rename", options=list(dataset.dataframe.columns))
@@ -859,33 +1932,50 @@ def render_transformation() -> None:
             if active_rename_map:
                 working_dataset = engine.rename_columns(working_dataset, active_rename_map)
             if working_dataset is dataset:
-                st.warning("No transformation was selected.")
+                st.warning("No transformation changes were selected, so the active dataset was left unchanged.")
             else:
                 replace_dataset(dataset.name, working_dataset)
-                st.success("Transformations completed successfully.")
+                st.success("Transformation complete. The active dataset now reflects the selected structural changes.")
         except DataAutomationError as exc:
             st.error(str(exc))
 
+    render_stage_header("Transformation Results", "Inspect the transformed dataset before continuing to merge, chart, or export.")
     render_preview(get_selected_dataset(), title="Transformed Dataset Preview")
 
 
 def render_merging() -> None:
-    st.markdown("## Merging")
+    render_module_shell(
+        "Merging",
+        "Combine two workspace datasets with explicit key selection, risk preview, and controlled join behavior.",
+    )
     names = dataset_names()
     if len(names) < 2:
         st.error("Merge is blocked until at least two datasets are loaded.")
         return
 
+    render_stage_header("Configure Merge", "Choose the left and right datasets, select join keys, and inspect merge risk before execution.")
     left_column, config_column, right_column = st.columns([1, 1.2, 1])
     with left_column:
         left_name = st.selectbox("Left dataset", options=names, key="merge_left")
         left_dataset = st.session_state.datasets[left_name]
-        st.dataframe(left_dataset.dataframe.head(8), width="stretch", hide_index=True)
+        render_table(
+            "Left Dataset Preview",
+            left_dataset.dataframe,
+            caption="Priority columns from the left-side dataset to confirm keys before merging.",
+            rows=8,
+            columns=_select_priority_columns(left_dataset.dataframe, limit=6),
+        )
     with right_column:
         right_options = [name for name in names if name != left_name]
         right_name = st.selectbox("Right dataset", options=right_options, key="merge_right")
         right_dataset = st.session_state.datasets[right_name]
-        st.dataframe(right_dataset.dataframe.head(8), width="stretch", hide_index=True)
+        render_table(
+            "Right Dataset Preview",
+            right_dataset.dataframe,
+            caption="Priority columns from the right-side dataset to confirm key alignment before merging.",
+            rows=8,
+            columns=_select_priority_columns(right_dataset.dataframe, limit=6),
+        )
     with config_column:
         join_type = st.selectbox("Join type", options=["inner", "left", "right", "outer"])
         common_columns = sorted(set(left_dataset.dataframe.columns).intersection(right_dataset.dataframe.columns))
@@ -939,27 +2029,33 @@ def render_merging() -> None:
                     merged, warnings = st.session_state.engine.merge(left_dataset, right_dataset, configuration)
                     add_dataset(merged)
                     st.session_state.merge_preview = warnings
-                    st.success(f"Merge completed. Result dataset `{merged.name}` added to the workspace.")
+                    st.success(f"Merge complete. Result dataset `{merged.name}` is now available in the workspace.")
                 except DataAutomationError as exc:
                     st.error(str(exc))
 
     if st.session_state.merge_preview:
+        render_stage_header("Merge Warnings", "Review detected merge risks and cardinality issues before trusting the output.")
         st.markdown("### Merge Risk Assessment")
         for warning in st.session_state.merge_preview:
             st.warning(warning)
 
     selected = get_selected_dataset()
     if selected:
+        render_stage_header("Merge Results", "Inspect the merged artifact that was added back into the workspace.")
         render_preview(selected, title="Merged Dataset Preview")
 
 
 def render_export() -> None:
     dataset = get_selected_dataset()
-    st.markdown("## Export")
+    render_module_shell(
+        "Export",
+        "Prepare a controlled output package from the active dataset, choose the exact columns to include, and download the final file.",
+    )
     if not dataset:
         st.info("Load a dataset before exporting.")
         return
 
+    render_stage_header("Configure Export", "Select the target columns and output format for the exported artifact.")
     export_columns = st.multiselect(
         "Columns to export",
         options=list(dataset.dataframe.columns),
@@ -992,7 +2088,7 @@ def render_export() -> None:
                 "file_format": file_format,
                 "columns": export_columns,
             }
-            st.success("Export is ready for download.")
+            st.success("Export package is ready. Review the selection and download when you are ready.")
         except DataAutomationError as exc:
             st.error(str(exc))
 
@@ -1005,6 +2101,7 @@ def render_export() -> None:
         and export_context.get("file_format") == file_format
         and export_context.get("columns") == export_columns
     ):
+        render_stage_header("Export Package", "Download the prepared artifact once the export configuration has been validated.")
         st.download_button(
             label=f"Download {export_artifact.file_name}",
             data=export_artifact.bytes_data,
@@ -1094,25 +2191,86 @@ def _build_altair_chart(chart_artifact, spec: ChartSpec) -> alt.Chart:
     )
 
 
+def _chart_type_label(chart_type: str) -> str:
+    labels = {
+        "line": "Line",
+        "scatter": "Scatter",
+        "bar": "Bar",
+        "pie": "Pie",
+        "heatmap": "Heatmap",
+    }
+    return labels.get(chart_type.lower(), chart_type.title())
+
+
+def _chart_value_label(y_column: str | None) -> str:
+    return y_column if y_column is not None else "Count Rows"
+
+
+def _chart_scope_label(chart_type: str, aggregation: str, top_n: int) -> str:
+    if chart_type in {"scatter", "heatmap"}:
+        return "Direct plot"
+    if chart_type == "line":
+        return aggregation
+    return f"{aggregation} | top {top_n}"
+
+
+def _render_chart_selection_summary(title: str, spec: ChartSpec) -> None:
+    summary_columns = st.columns(4)
+    with summary_columns[0]:
+        render_workspace_card(title, _chart_type_label(spec.chart_type), "Selected chart family")
+    with summary_columns[1]:
+        render_workspace_card("Primary Column", spec.x_column, "Current x-axis or category field")
+    with summary_columns[2]:
+        render_workspace_card("Value Field", _chart_value_label(spec.y_column), "Metric or count used in the plot")
+    with summary_columns[3]:
+        render_workspace_card("Plot Scope", _chart_scope_label(spec.chart_type, spec.aggregation, spec.top_n), "Aggregation and display window")
+
+
+def _chart_resolution_message(requested_spec: ChartSpec, resolved_spec: ChartSpec, fallback_error: str | None) -> tuple[str, str]:
+    if requested_spec == resolved_spec:
+        return (
+            "Requested plot confirmed",
+            "The current chart matches the exact chart type and fields selected in the controls.",
+        )
+
+    reasons: list[str] = []
+    if requested_spec.chart_type != resolved_spec.chart_type:
+        reasons.append(
+            f"The requested `{_chart_type_label(requested_spec.chart_type)}` view did not have a compatible field layout, so the chart switched to `{_chart_type_label(resolved_spec.chart_type)}`."
+        )
+    if requested_spec.x_column != resolved_spec.x_column:
+        reasons.append(f"`{requested_spec.x_column}` could not support the final plot, so the x field moved to `{resolved_spec.x_column}`.")
+    if requested_spec.y_column != resolved_spec.y_column:
+        reasons.append(
+            f"The value field changed from `{_chart_value_label(requested_spec.y_column)}` to `{_chart_value_label(resolved_spec.y_column)}`."
+        )
+    if fallback_error:
+        reasons.append(f"Fallback trigger: {fallback_error}")
+    return (
+        "Plot adjusted for compatibility",
+        " ".join(reasons),
+    )
+
+
 def _apply_chart_theme(chart: alt.Chart) -> alt.Chart:
     return (
         chart.configure_view(stroke=None)
         .configure_axis(
-            labelColor="#b7c4dc",
-            titleColor="#eef4ff",
-            gridColor="rgba(179,197,226,0.15)",
-            domainColor="rgba(179,197,226,0.20)",
-            tickColor="rgba(179,197,226,0.20)",
+            labelColor="#53627f",
+            titleColor="#172033",
+            gridColor="rgba(111,127,155,0.18)",
+            domainColor="rgba(83,98,127,0.22)",
+            tickColor="rgba(83,98,127,0.22)",
         )
         .configure_title(
-            color="#f5f8ff",
+            color="#172033",
             fontSize=20,
-            subtitleColor="#9fb0d0",
+            subtitleColor="#53627f",
             anchor="start",
         )
         .configure_legend(
-            titleColor="#eef4ff",
-            labelColor="#b7c4dc",
+            titleColor="#172033",
+            labelColor="#53627f",
             orient="bottom",
         )
     )
@@ -1120,7 +2278,7 @@ def _apply_chart_theme(chart: alt.Chart) -> alt.Chart:
 
 def render_visual_analytics() -> None:
     dataset = get_selected_dataset()
-    render_section_header(
+    render_module_shell(
         "Visualization Studio",
         "Build publication-grade charts from the active dataset, switch between line, scatter, bar, pie, and heatmap views, and download the result as a polished vector image.",
     )
@@ -1128,6 +2286,7 @@ def render_visual_analytics() -> None:
         st.info("Load a dataset before using the visualization studio.")
         return
 
+    render_stage_header("Configure Visualization", "Choose the chart type and plotting fields. The app will recover with compatible defaults when needed.")
     dataframe = dataset.dataframe
     numeric_columns = list(dataframe.select_dtypes(include="number").columns)
     all_columns = list(dataframe.columns)
@@ -1159,7 +2318,7 @@ def render_visual_analytics() -> None:
 
     control_columns = st.columns([1.15, 1.1, 0.9, 0.85])
     with control_columns[0]:
-        chart_type = st.selectbox("Graph Type", options=list(chart_type_labels), format_func=chart_type_labels.get, key="chart_type")
+        chart_type = st.selectbox("Chart Type", options=list(chart_type_labels), format_func=chart_type_labels.get, key="chart_type")
         default_x = default_spec.x_column if default_spec is not None else all_columns[0]
         x_column = st.selectbox("Primary Column", options=all_columns, index=all_columns.index(default_x), key="chart_x_column")
     with control_columns[1]:
@@ -1262,7 +2421,7 @@ def render_visual_analytics() -> None:
             key="chart_aggregation",
         )
         top_n = st.slider(
-            "Display Limit",
+            "Display Range",
             min_value=4,
             max_value=20,
             value=current_top_n if 4 <= current_top_n <= 20 else 12,
@@ -1274,54 +2433,78 @@ def render_visual_analytics() -> None:
         st.caption("Charts render live in the app and download as SVG for crisp reports and presentations.")
         st.caption("Heatmaps summarize pair-frequency across the selected columns.")
 
-    candidate_specs = recommend_chart_specs(
-        dataframe,
+    requested_spec = ChartSpec(
         chart_type=chart_type,
-        preferred_x=x_column,
-        preferred_y=y_column,
+        x_column=x_column,
+        y_column=y_column,
         aggregation=aggregation,
         top_n=top_n,
     )
-    if not candidate_specs:
-        candidate_specs = []
-        for fallback_chart_type in fallback_chart_types:
-            if fallback_chart_type == chart_type:
-                continue
-            candidate_specs.extend(
-                recommend_chart_specs(
-                    dataframe,
-                    chart_type=fallback_chart_type,
-                    preferred_x=x_column,
-                    preferred_y=y_column,
-                    aggregation=aggregation,
-                    top_n=top_n,
-                )
-            )
-        if not candidate_specs:
-            st.error("No compatible columns are available for plotting in this dataset.")
-            return
+    render_stage_header("Selection Review", "Confirm what is currently requested before the app resolves the final chart.")
+    _render_chart_selection_summary("Requested Plot", requested_spec)
 
     spec = None
     chart_artifact = None
     errors: list[str] = []
-    for candidate in candidate_specs:
-        try:
-            chart_artifact = build_chart_artifact(dataframe, candidate, dataset_name=dataset.name)
-            spec = candidate
-            break
-        except ValueError as exc:
-            errors.append(str(exc))
+    requested_error = None
+    try:
+        chart_artifact = build_chart_artifact(dataframe, requested_spec, dataset_name=dataset.name)
+        spec = requested_spec
+    except ValueError as exc:
+        requested_error = str(exc)
+        errors.append(requested_error)
+
+    if chart_artifact is None or spec is None:
+        candidate_specs = [
+            candidate
+            for candidate in recommend_chart_specs(
+                dataframe,
+                chart_type=chart_type,
+                preferred_x=x_column,
+                preferred_y=y_column,
+                aggregation=aggregation,
+                top_n=top_n,
+            )
+            if candidate != requested_spec
+        ]
+        if not candidate_specs:
+            candidate_specs = []
+            for fallback_chart_type in fallback_chart_types:
+                if fallback_chart_type == chart_type:
+                    continue
+                candidate_specs.extend(
+                    recommend_chart_specs(
+                        dataframe,
+                        chart_type=fallback_chart_type,
+                        preferred_x=x_column,
+                        preferred_y=y_column,
+                        aggregation=aggregation,
+                        top_n=top_n,
+                    )
+                )
+            if not candidate_specs:
+                st.error("No compatible columns are available for plotting in this dataset.")
+                return
+
+        for candidate in candidate_specs:
+            try:
+                chart_artifact = build_chart_artifact(dataframe, candidate, dataset_name=dataset.name)
+                spec = candidate
+                break
+            except ValueError as exc:
+                errors.append(str(exc))
 
     if chart_artifact is None or spec is None:
         st.error(errors[0] if errors else "No compatible chart could be created from this dataset.")
         return
 
-    if spec.chart_type != chart_type or spec.x_column != x_column or spec.y_column != y_column:
-        resolved_y = spec.y_column if spec.y_column is not None else "Count Rows"
-        st.info(
-            f"Automatically selected a compatible plot: `{chart_type_labels[spec.chart_type]}` using "
-            f"`{spec.x_column}` and `{resolved_y}`."
-        )
+    resolution_title, resolution_copy = _chart_resolution_message(requested_spec, spec, requested_error)
+    render_stage_header("Plot Resolution", "See what the app actually plotted and whether a fallback was needed to keep the chart valid.")
+    _render_chart_selection_summary("Resolved Plot", spec)
+    if requested_spec == spec:
+        st.success(f"{resolution_title}. {resolution_copy}")
+    else:
+        st.warning(f"{resolution_title}. {resolution_copy}")
 
     chart = _apply_chart_theme(_build_altair_chart(chart_artifact, spec)).properties(
         title=alt.TitleParams(
@@ -1338,23 +2521,41 @@ def render_visual_analytics() -> None:
     with metric_columns[2]:
         render_metric_card("Y Axis", chart_artifact.y_label or "Count", "Measured value")
 
+    render_stage_header("Visualization Output", "Review the generated chart, export it, and inspect the plotted dataset behind the visual.")
     st.altair_chart(chart, width="stretch", theme=None)
-    st.download_button(
-        "Download Graph as SVG",
-        data=chart_artifact.svg_bytes,
-        file_name=f"{dataset.name}_{chart_type}.svg",
-        mime="image/svg+xml",
-        width="stretch",
-    )
-    st.caption("SVG is a vector image format, which keeps chart text and lines sharp in Word, PowerPoint, and print exports.")
+    download_columns = st.columns(2)
+    with download_columns[0]:
+        st.download_button(
+            "Download Graph as PNG",
+            data=chart_artifact.png_bytes,
+            file_name=f"{dataset.name}_{spec.chart_type}.png",
+            mime="image/png",
+            width="stretch",
+        )
+    with download_columns[1]:
+        st.download_button(
+            "Download Graph as SVG",
+            data=chart_artifact.svg_bytes,
+            file_name=f"{dataset.name}_{spec.chart_type}.svg",
+            mime="image/svg+xml",
+            width="stretch",
+        )
+    st.caption("PNG exports use a large white canvas focused on the chart for presentations and screenshots. SVG remains available for crisp vector output.")
 
-    st.markdown("### Plot Data")
-    st.dataframe(chart_artifact.dataframe, width="stretch", hide_index=True)
+    render_table(
+        "Plot Data",
+        chart_artifact.dataframe,
+        caption=(
+            f"Showing the exact dataset behind the plotted result: `{_chart_type_label(spec.chart_type)}` "
+            f"with `{spec.x_column}` and `{_chart_value_label(spec.y_column)}`."
+        ),
+    )
+    
 
 
 def render_statistical_tables() -> None:
     dataset = get_selected_dataset()
-    render_section_header(
+    render_module_shell(
         "Statistical Tables",
         "Select any columns, generate a presentation-ready summary table with key statistics, and copy the formatted output directly into Word while keeping table structure intact.",
     )
@@ -1362,6 +2563,7 @@ def render_statistical_tables() -> None:
         st.info("Load a dataset before generating statistical tables.")
         return
 
+    render_stage_header("Configure Summary Table", "Choose the columns and statistical measures that should appear in the output matrix.")
     dataframe = dataset.dataframe
     default_columns = list(dataframe.columns[: min(6, len(dataframe.columns))])
     default_statistics = ["dtype", "count", "nulls", "unique", "mean", "median", "std", "min", "max", "q1", "q3", "iqr", "mode"]
@@ -1400,8 +2602,12 @@ def render_statistical_tables() -> None:
     with metric_columns[2]:
         render_metric_card("Source Rows", f"{len(dataframe):,}", "Rows scanned for the summary")
 
-    st.markdown("### Summary Matrix")
-    st.dataframe(stats_frame, width="stretch", hide_index=True)
+    render_stage_header("Table Output", "Review the statistical matrix, copy it to Word, or download the formatted HTML version.")
+    render_table(
+        "Summary Matrix",
+        stats_frame,
+        caption="A formatted view of the selected metrics, ready for report review before copying to Word.",
+    )
 
     html_table = statistics_table_to_html(stats_frame, title=f"{dataset.name} Statistical Summary")
     component_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", f"word-copy-{dataset.name.lower()}").strip("-") or "word-copy-table"
@@ -1416,42 +2622,155 @@ def render_statistical_tables() -> None:
         mime="text/html",
         width="stretch",
     )
-    st.caption("If your browser blocks clipboard access, download the HTML file and open it in Word to keep the table styling.")
+    st.caption("If your browser blocks clipboard access, download the HTML file and open it in Word to preserve the table styling.")
 
-    st.markdown("### Selected Data Preview")
-    st.dataframe(dataframe.loc[:, selected_columns].head(50), width="stretch", hide_index=True)
+    render_table(
+        "Selected Data Preview",
+        dataframe,
+        caption="A source preview of the selected columns so you can cross-check the summary table against the underlying records.",
+        rows=50,
+        columns=selected_columns,
+    )
 
 
 def render_history() -> None:
-    st.markdown("## Operation History")
+    render_module_shell(
+        "Operation History",
+        "Review the audit trail of actions executed in the current workspace session, including transformations, validation, generation, and export events.",
+    )
     records = st.session_state.engine.logger.list_records()
     if not records:
-        st.info("No logged operations yet.")
+        st.info("No workspace history is available yet. Activity will appear here after the first workflow action.")
         return
-    history_frame = pd.DataFrame(record.to_dict() for record in records)
-    st.dataframe(history_frame, width="stretch", hide_index=True)
+    render_stage_header("Session Audit Trail", "Inspect the recorded sequence of operations for traceability and workflow review.")
+    history_frame = pd.DataFrame(
+        {
+            "time": [_format_timestamp(record.timestamp) for record in records],
+            "operation": [record.operation_name for record in records],
+            "summary": [record.summary for record in records],
+            "dataset_before": [record.dataset_before or "—" for record in records],
+            "dataset_after": [record.dataset_after or "—" for record in records],
+            "parameters": [record.parameters for record in records],
+        }
+    )
+    render_table(
+        "Session Audit Trail",
+        history_frame,
+        caption="Chronological workspace history with parameters, source dataset, and resulting dataset preserved for review.",
+    )
 
 
 def sidebar() -> str:
     with st.sidebar:
-        st.markdown("## VANDI_DATA_CENTER")
-        st.caption("Automation Engine | Local Instance")
-        if st.button("Reset Workspace", width="stretch"):
-            reset_workspace()
-            st.rerun()
+        summary = _workspace_summary()
+        dataset = summary["dataset"]
+        selected_page = st.session_state.get("page_selector")
+        stored_page = st.session_state.get("page")
+        if selected_page in PAGE_OPTIONS:
+            current_page = selected_page
+        elif stored_page in PAGE_OPTIONS:
+            current_page = stored_page
+        else:
+            current_page = "Dashboard"
+        st.session_state.page = current_page
+        st.session_state.page_selector = current_page
+        recent_records = list(summary["records"])[-3:][::-1]
+        status_tone = escape(str(summary["status_tone"]))
+        status_label = escape(str(summary["status_label"]))
+        status_detail = escape(str(summary["status_detail"]))
+        mode_label = str(summary["mode_label"])
+        input_mode = str(summary["input_mode"])
+        active_dataset_name = dataset.name if dataset else "No dataset"
+        active_dataset_type = dataset.source_type.upper() if dataset else "Load or generate data"
+        row_count = f"{dataset.row_count:,}" if dataset else "0"
+        column_count = f"{dataset.column_count:,}" if dataset else "0"
+
+        st.markdown(
+            """
+            <div class="sidebar-brand">
+                <div class="sidebar-brand-label">Vandi Data Center</div>
+                <div class="sidebar-brand-title">Workspace Control Panel</div>
+                <div class="sidebar-brand-copy">One place to monitor mode, active data, and session movement across the app.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"""
+            
+            """,
+            unsafe_allow_html=True,
+        )
         current_names = dataset_names()
         if current_names:
             selected_name = st.selectbox(
-                "Workspace Dataset",
+                "Active Workspace Dataset",
                 options=current_names,
                 index=current_names.index(st.session_state.selected_dataset) if st.session_state.selected_dataset in current_names else 0,
             )
             st.session_state.selected_dataset = selected_name
-        st.markdown("---")
-        return st.radio(
-            "Workflow Modules",
-            options=["Dashboard", "Cleaning", "Filtering", "Validation", "Transformation", "Merging", "Visual Analytics", "Statistical Tables", "Export", "History"],
+        else:
+            st.caption("No datasets are loaded into the workspace yet.")
+        st.markdown(
+            f"""
+            <div class="sidebar-panel">
+                <div class="sidebar-panel-title">Current Focus</div>
+                <div class="sidebar-keyline">{escape(current_page)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
+        st.markdown(
+            """
+            <div class="sidebar-panel">
+                <div class="sidebar-panel-title">Navigation</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        page = st.radio(
+            "Workflow Modules",
+            options=PAGE_OPTIONS,
+            key="page_selector",
+            label_visibility="collapsed",
+        )
+        if page != st.session_state.page:
+            st.session_state.page = page
+        st.caption(PAGE_DESCRIPTIONS[page])
+        if recent_records:
+            activity_markup = "".join(
+                f"""
+                <div class="sidebar-activity-item">
+                    <strong>{escape(record.operation_name)}</strong>
+                    <span>{escape(record.summary)}</span>
+                    <span>{escape(_format_timestamp(record.timestamp))}</span>
+                </div>
+                """
+                for record in recent_records
+            )
+            st.markdown(
+                f"""
+                <div class="sidebar-panel">
+                    <div class="sidebar-panel-title">Recent Status</div>
+                    <div class="sidebar-activity-list">{activity_markup}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div class="sidebar-panel">
+                    <div class="sidebar-panel-title">Recent Status</div>
+                    <div class="sidebar-keyline">No session events yet. Activity will appear here as soon as the workspace executes an action.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        if st.button("Reset Workspace", width="stretch"):
+            reset_workspace()
+            st.rerun()
+        return page
 
 
 def main() -> None:

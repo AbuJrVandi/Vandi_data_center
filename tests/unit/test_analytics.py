@@ -31,6 +31,7 @@ def test_build_chart_artifact_returns_svg_for_bar_chart(sample_dataframe: pd.Dat
 
     assert artifact.dataframe.columns.tolist() == ["x", "y"]
     assert b"<svg" in artifact.svg_bytes
+    assert artifact.png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
     assert "Bar Chart" in artifact.title
 
 

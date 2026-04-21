@@ -2,11 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+from io import BytesIO
 from math import cos, pi, sin
+import os
+from pathlib import Path
+import tempfile
 
+MPL_CONFIG_DIR = Path(tempfile.gettempdir()) / "astrodata_tool_matplotlib"
+MPL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(MPL_CONFIG_DIR))
+
+import matplotlib
 import numpy as np
 import pandas as pd
 from pandas import CategoricalDtype
+
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 
 SUPPORTED_AGGREGATIONS = {
@@ -38,6 +51,18 @@ SUPPORTED_STATISTICS = [
     "mode",
 ]
 
+SVG_PAGE_BACKGROUND = "#ffffff"
+SVG_CARD_BACKGROUND = "#ffffff"
+SVG_CARD_BORDER = "#d7e1ee"
+SVG_PLOT_BACKGROUND = "#f7faff"
+SVG_PLOT_BORDER = "#d7e1ee"
+SVG_TITLE_COLOR = "#172033"
+SVG_SUBTITLE_COLOR = "#53627f"
+SVG_ACCENT_COLOR = "#2f6bff"
+SVG_GRID_COLOR = "#dbe5f2"
+SVG_AXIS_COLOR = "#8a99b2"
+SVG_TEXT_ON_COLOR = "#ffffff"
+
 
 @dataclass(slots=True)
 class ChartSpec:
@@ -52,6 +77,7 @@ class ChartSpec:
 class ChartArtifact:
     dataframe: pd.DataFrame
     svg_bytes: bytes
+    png_bytes: bytes
     title: str
     x_label: str
     y_label: str
@@ -64,26 +90,167 @@ def build_chart_artifact(dataframe: pd.DataFrame, spec: ChartSpec, *, dataset_na
     if chart_type == "scatter":
         chart_frame = _prepare_scatter_frame(dataframe, spec)
         svg = _build_scatter_svg(chart_frame, dataset_name=dataset_name, spec=spec)
-        return ChartArtifact(chart_frame, svg.encode("utf-8"), f"{dataset_name}: Scatter Plot", spec.x_column, spec.y_column or "")
+        png = _build_chart_png(chart_frame, dataset_name=dataset_name, spec=spec)
+        return ChartArtifact(chart_frame, svg.encode("utf-8"), png, f"{dataset_name}: Scatter Plot", spec.x_column, spec.y_column or "")
     if chart_type == "line":
         chart_frame = _prepare_series_frame(dataframe, spec)
         svg = _build_line_svg(chart_frame, dataset_name=dataset_name, spec=spec)
-        return ChartArtifact(chart_frame, svg.encode("utf-8"), f"{dataset_name}: Line Chart", spec.x_column, spec.y_column or "Count")
+        png = _build_chart_png(chart_frame, dataset_name=dataset_name, spec=spec)
+        return ChartArtifact(chart_frame, svg.encode("utf-8"), png, f"{dataset_name}: Line Chart", spec.x_column, spec.y_column or "Count")
     if chart_type == "bar":
         chart_frame = _prepare_series_frame(dataframe, spec, sort_desc=True, limit=spec.top_n)
         svg = _build_bar_svg(chart_frame, dataset_name=dataset_name, spec=spec)
-        return ChartArtifact(chart_frame, svg.encode("utf-8"), f"{dataset_name}: Bar Chart", spec.x_column, spec.y_column or "Count")
+        png = _build_chart_png(chart_frame, dataset_name=dataset_name, spec=spec)
+        return ChartArtifact(chart_frame, svg.encode("utf-8"), png, f"{dataset_name}: Bar Chart", spec.x_column, spec.y_column or "Count")
     if chart_type == "pie":
         chart_frame = _prepare_pie_frame(dataframe, spec)
         svg = _build_pie_svg(chart_frame, dataset_name=dataset_name, spec=spec)
         y_label = spec.y_column or "count"
-        return ChartArtifact(chart_frame, svg.encode("utf-8"), f"{dataset_name}: Pie Chart", spec.x_column, y_label)
+        png = _build_chart_png(chart_frame, dataset_name=dataset_name, spec=spec)
+        return ChartArtifact(chart_frame, svg.encode("utf-8"), png, f"{dataset_name}: Pie Chart", spec.x_column, y_label)
     if chart_type == "heatmap":
         chart_frame = _prepare_heatmap_frame(dataframe, spec)
         y_label = spec.y_column or "count"
         svg = _build_heatmap_svg(chart_frame, dataset_name=dataset_name, spec=spec)
-        return ChartArtifact(chart_frame, svg.encode("utf-8"), f"{dataset_name}: Heatmap", spec.x_column, y_label)
+        png = _build_chart_png(chart_frame, dataset_name=dataset_name, spec=spec)
+        return ChartArtifact(chart_frame, svg.encode("utf-8"), png, f"{dataset_name}: Heatmap", spec.x_column, y_label)
     raise ValueError(f"Unsupported chart type: {spec.chart_type}")
+
+
+def _build_chart_png(dataframe: pd.DataFrame, *, dataset_name: str, spec: ChartSpec) -> bytes:
+    figure, axis = plt.subplots(figsize=(16, 9), dpi=220, facecolor=SVG_PAGE_BACKGROUND)
+    axis.set_facecolor(SVG_PAGE_BACKGROUND)
+
+    try:
+        chart_type = spec.chart_type.lower()
+        if chart_type == "line":
+            _plot_line_png(axis, dataframe, spec=spec)
+        elif chart_type == "scatter":
+            _plot_scatter_png(axis, dataframe, spec=spec)
+        elif chart_type == "bar":
+            _plot_bar_png(axis, dataframe, spec=spec)
+        elif chart_type == "pie":
+            _plot_pie_png(axis, dataframe, spec=spec)
+        elif chart_type == "heatmap":
+            _plot_heatmap_png(figure, axis, dataframe, spec=spec)
+        else:
+            raise ValueError(f"Unsupported chart type: {spec.chart_type}")
+
+        png_buffer = BytesIO()
+        figure.savefig(
+            png_buffer,
+            format="png",
+            dpi=220,
+            facecolor=SVG_PAGE_BACKGROUND,
+            bbox_inches="tight",
+            pad_inches=0.28,
+        )
+        png_buffer.seek(0)
+        return png_buffer.read()
+    finally:
+        plt.close(figure)
+
+
+def _plot_line_png(axis, dataframe: pd.DataFrame, *, spec: ChartSpec) -> None:
+    positions = np.arange(len(dataframe), dtype=float)
+    values = pd.to_numeric(dataframe["y"], errors="coerce").astype(float).to_numpy()
+    labels = [str(value) for value in dataframe["x"].tolist()]
+    axis.plot(positions, values, color=SVG_ACCENT_COLOR, linewidth=3.4, marker="o", markersize=6.5)
+    axis.fill_between(positions, values, color=SVG_ACCENT_COLOR, alpha=0.10)
+    _style_xy_png_axis(axis, positions, labels, x_label=spec.x_column, y_label=spec.y_column or "Count")
+
+
+def _plot_bar_png(axis, dataframe: pd.DataFrame, *, spec: ChartSpec) -> None:
+    positions = np.arange(len(dataframe), dtype=float)
+    values = pd.to_numeric(dataframe["y"], errors="coerce").astype(float).to_numpy()
+    labels = [str(value) for value in dataframe["x"].tolist()]
+    colors = plt.cm.Blues(np.linspace(0.55, 0.85, len(values))) if len(values) else SVG_ACCENT_COLOR
+    axis.bar(positions, values, width=0.72, color=colors, edgecolor="#ffffff", linewidth=1.0)
+    _style_xy_png_axis(axis, positions, labels, x_label=spec.x_column, y_label=spec.y_column or "Count")
+
+
+def _plot_scatter_png(axis, dataframe: pd.DataFrame, *, spec: ChartSpec) -> None:
+    x_series = dataframe["x"]
+    y_values = pd.to_numeric(dataframe["y"], errors="coerce").astype(float).to_numpy()
+    if pd.api.types.is_numeric_dtype(x_series) or pd.api.types.is_datetime64_any_dtype(x_series):
+        x_values = pd.to_datetime(x_series) if pd.api.types.is_datetime64_any_dtype(x_series) else pd.to_numeric(x_series, errors="coerce")
+        axis.scatter(x_values, y_values, s=84, color="#4ba3ff", edgecolors="#ffffff", linewidths=1.1, alpha=0.95)
+        _style_numeric_axis(axis, x_label=spec.x_column, y_label=spec.y_column or "")
+        return
+
+    positions = np.arange(len(dataframe), dtype=float)
+    labels = [str(value) for value in x_series.tolist()]
+    axis.scatter(positions, y_values, s=84, color="#4ba3ff", edgecolors="#ffffff", linewidths=1.1, alpha=0.95)
+    _style_xy_png_axis(axis, positions, labels, x_label=spec.x_column, y_label=spec.y_column or "")
+
+
+def _plot_pie_png(axis, dataframe: pd.DataFrame, *, spec: ChartSpec) -> None:
+    values = pd.to_numeric(dataframe["y"], errors="coerce").astype(float).to_numpy()
+    labels = [_truncate_label(str(value), 18) for value in dataframe["x"].tolist()]
+    colors = ["#2f6bff", "#4ba3ff", "#5ef0b7", "#ffd166", "#ff7c6b", "#b28dff", "#3ddc97", "#ff9f43", "#97c1ff", "#ff6384"]
+    wedges, texts, autotexts = axis.pie(
+        values,
+        labels=labels,
+        colors=colors[: len(values)],
+        startangle=90,
+        counterclock=False,
+        autopct=lambda pct: f"{pct:.1f}%" if pct >= 3 else "",
+        pctdistance=0.72,
+        labeldistance=1.06,
+        wedgeprops={"linewidth": 1.4, "edgecolor": "#ffffff"},
+        textprops={"color": SVG_TITLE_COLOR, "fontsize": 11},
+    )
+    for auto_text in autotexts:
+        auto_text.set_color(SVG_TEXT_ON_COLOR)
+        auto_text.set_fontsize(10)
+        auto_text.set_weight("bold")
+    axis.set_aspect("equal")
+    axis.set_xticks([])
+    axis.set_yticks([])
+    for spine in axis.spines.values():
+        spine.set_visible(False)
+
+
+def _plot_heatmap_png(figure, axis, dataframe: pd.DataFrame, *, spec: ChartSpec) -> None:
+    heatmap_frame = dataframe.pivot(index="y", columns="x", values="value").fillna(0)
+    image = axis.imshow(heatmap_frame.to_numpy(), cmap="Blues", aspect="auto")
+    axis.set_xticks(np.arange(len(heatmap_frame.columns)))
+    axis.set_xticklabels([_truncate_label(str(value), 12) for value in heatmap_frame.columns], rotation=0, fontsize=10, color=SVG_SUBTITLE_COLOR)
+    axis.set_yticks(np.arange(len(heatmap_frame.index)))
+    axis.set_yticklabels([_truncate_label(str(value), 16) for value in heatmap_frame.index], fontsize=10, color=SVG_SUBTITLE_COLOR)
+    axis.set_xlabel(spec.x_column, fontsize=12, color=SVG_TITLE_COLOR, labelpad=12)
+    axis.set_ylabel(spec.y_column or "", fontsize=12, color=SVG_TITLE_COLOR, labelpad=12)
+    for row_index, row_label in enumerate(heatmap_frame.index):
+        for column_index, column_label in enumerate(heatmap_frame.columns):
+            value = heatmap_frame.loc[row_label, column_label]
+            axis.text(column_index, row_index, _format_number(float(value)), ha="center", va="center", color=SVG_TITLE_COLOR, fontsize=9)
+    colorbar = figure.colorbar(image, ax=axis, fraction=0.03, pad=0.02)
+    colorbar.outline.set_edgecolor(SVG_CARD_BORDER)
+    colorbar.ax.tick_params(colors=SVG_SUBTITLE_COLOR, labelsize=9)
+    _style_numeric_axis(axis, x_label=spec.x_column, y_label=spec.y_column or "")
+    axis.grid(False)
+
+
+def _style_xy_png_axis(axis, positions, labels: list[str], *, x_label: str, y_label: str) -> None:
+    axis.set_xlim(-0.5, max(len(positions) - 0.5, 0.5))
+    axis.set_xticks(positions)
+    axis.set_xticklabels([_truncate_label(label, 14) for label in labels], fontsize=10, color=SVG_SUBTITLE_COLOR)
+    _style_numeric_axis(axis, x_label=x_label, y_label=y_label)
+
+
+def _style_numeric_axis(axis, *, x_label: str, y_label: str) -> None:
+    axis.set_xlabel(x_label, fontsize=12, color=SVG_TITLE_COLOR, labelpad=12)
+    axis.set_ylabel(y_label, fontsize=12, color=SVG_TITLE_COLOR, labelpad=12)
+    axis.tick_params(axis="y", colors=SVG_SUBTITLE_COLOR, labelsize=10)
+    axis.tick_params(axis="x", colors=SVG_SUBTITLE_COLOR)
+    axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _: _format_number(float(value))))
+    axis.grid(axis="y", color=SVG_GRID_COLOR, linewidth=0.8)
+    axis.grid(axis="x", visible=False)
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    axis.spines["left"].set_color(SVG_CARD_BORDER)
+    axis.spines["bottom"].set_color(SVG_CARD_BORDER)
+    axis.margins(x=0.02, y=0.08)
 
 
 def recommend_chart_specs(
@@ -505,16 +672,16 @@ def _build_xy_chart_svg(
     for idx in range(6):
         value = y_max * idx / 5
         y_pixel = y_to_pixel(value)
-        grid_lines.append(f'<line x1="{left}" y1="{y_pixel:.2f}" x2="{right}" y2="{y_pixel:.2f}" stroke="rgba(196,210,239,0.16)" stroke-width="1" />')
+        grid_lines.append(f'<line x1="{left}" y1="{y_pixel:.2f}" x2="{right}" y2="{y_pixel:.2f}" stroke="{SVG_GRID_COLOR}" stroke-width="1" />')
         y_ticks.append(
-            f'<text x="{left - 18}" y="{y_pixel + 5:.2f}" text-anchor="end" fill="#a9b8d4" font-size="13">{escape(_format_number(value))}</text>'
+            f'<text x="{left - 18}" y="{y_pixel + 5:.2f}" text-anchor="end" fill="{SVG_AXIS_COLOR}" font-size="13">{escape(_format_number(value))}</text>'
         )
 
     x_ticks = []
     for x_position, label in zip(x_positions, x_values, strict=False):
         truncated = _truncate_label(label, 16)
         x_ticks.append(
-            f'<text x="{x_position:.2f}" y="{bottom + 28}" text-anchor="middle" fill="#a9b8d4" font-size="12">{escape(truncated)}</text>'
+            f'<text x="{x_position:.2f}" y="{bottom + 28}" text-anchor="middle" fill="{SVG_AXIS_COLOR}" font-size="12">{escape(truncated)}</text>'
         )
 
     points = [f"{x:.2f},{y_to_pixel(y):.2f}" for x, y in zip(x_positions, y_values, strict=False)]
@@ -525,7 +692,7 @@ def _build_xy_chart_svg(
 
     marks: list[str] = []
     if chart_style == "line":
-        marks.append(f'<path d="{path_d}" fill="none" stroke="#58d0ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />')
+        marks.append(f'<path d="{path_d}" fill="none" stroke="{SVG_ACCENT_COLOR}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />')
         area_points = " ".join(points + [f"{right:.2f},{bottom:.2f}", f"{left:.2f},{bottom:.2f}"])
         marks.append(f'<polygon points="{area_points}" fill="url(#lineArea)" opacity="0.25" />')
     elif chart_style == "bar":
@@ -536,49 +703,49 @@ def _build_xy_chart_svg(
                 f'<rect x="{x_position - (bar_width / 2):.2f}" y="{top_y:.2f}" width="{bar_width:.2f}" height="{bottom - top_y:.2f}" rx="10" fill="url(#barFill)" />'
             )
             marks.append(
-                f'<text x="{x_position:.2f}" y="{top_y - 10:.2f}" text-anchor="middle" fill="#e8f2ff" font-size="12">{escape(_format_number(value))}</text>'
+                f'<text x="{x_position:.2f}" y="{top_y - 10:.2f}" text-anchor="middle" fill="{SVG_TITLE_COLOR}" font-size="12">{escape(_format_number(value))}</text>'
             )
     else:
         for x_position, value in zip(x_positions, y_values, strict=False):
             y_pixel = y_to_pixel(value)
-            marks.append(f'<circle cx="{x_position:.2f}" cy="{y_pixel:.2f}" r="7.5" fill="#59d6d6" stroke="#e7fcff" stroke-width="2" />')
+            marks.append(f'<circle cx="{x_position:.2f}" cy="{y_pixel:.2f}" r="7.5" fill="#59d6d6" stroke="{SVG_TEXT_ON_COLOR}" stroke-width="2" />')
             marks.append(f'<circle cx="{x_position:.2f}" cy="{y_pixel:.2f}" r="18" fill="#59d6d6" opacity="0.10" />')
 
     if chart_style == "line":
         for x_position, value in zip(x_positions, y_values, strict=False):
             y_pixel = y_to_pixel(value)
-            marks.append(f'<circle cx="{x_position:.2f}" cy="{y_pixel:.2f}" r="6" fill="#08101f" stroke="#8fe6ff" stroke-width="3" />')
+            marks.append(f'<circle cx="{x_position:.2f}" cy="{y_pixel:.2f}" r="6" fill="{SVG_PAGE_BACKGROUND}" stroke="#4ba3ff" stroke-width="3" />')
 
     return f"""
     <svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
         <defs>
             <linearGradient id="cardFill" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stop-color="#12203d" />
-                <stop offset="100%" stop-color="#0a1222" />
+                <stop offset="0%" stop-color="#ffffff" />
+                <stop offset="100%" stop-color="#f7faff" />
             </linearGradient>
             <linearGradient id="lineArea" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#58d0ff" />
-                <stop offset="100%" stop-color="#58d0ff" stop-opacity="0" />
+                <stop offset="0%" stop-color="#2f6bff" stop-opacity="0.24" />
+                <stop offset="100%" stop-color="#2f6bff" stop-opacity="0" />
             </linearGradient>
             <linearGradient id="barFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#4ed7ff" />
-                <stop offset="100%" stop-color="#31b48d" />
+                <stop offset="0%" stop-color="#4ba3ff" />
+                <stop offset="100%" stop-color="#2f6bff" />
             </linearGradient>
         </defs>
-        <rect width="{width}" height="{height}" fill="#07101d" rx="28" />
-        <rect x="34" y="28" width="{width - 68}" height="{height - 56}" rx="26" fill="url(#cardFill)" stroke="rgba(255,255,255,0.08)" />
-        <text x="76" y="90" fill="#f5f8ff" font-size="32" font-weight="700">{escape(title)}</text>
-        <text x="76" y="124" fill="#9eb0cd" font-size="16">{escape(subtitle)}</text>
-        <text x="{right}" y="90" fill="#4cd8d2" font-size="16" text-anchor="end">{escape(dataset_name)}</text>
-        <rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" rx="20" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)" />
+        <rect width="{width}" height="{height}" fill="{SVG_PAGE_BACKGROUND}" />
+        <rect x="34" y="28" width="{width - 68}" height="{height - 56}" rx="26" fill="url(#cardFill)" stroke="{SVG_CARD_BORDER}" />
+        <text x="76" y="90" fill="{SVG_TITLE_COLOR}" font-size="32" font-weight="700">{escape(title)}</text>
+        <text x="76" y="124" fill="{SVG_SUBTITLE_COLOR}" font-size="16">{escape(subtitle)}</text>
+        <text x="{right}" y="90" fill="{SVG_ACCENT_COLOR}" font-size="16" text-anchor="end">{escape(dataset_name)}</text>
+        <rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" rx="20" fill="{SVG_PLOT_BACKGROUND}" stroke="{SVG_PLOT_BORDER}" />
         {''.join(grid_lines)}
-        <line x1="{left}" y1="{bottom}" x2="{right}" y2="{bottom}" stroke="rgba(255,255,255,0.22)" stroke-width="2" />
-        <line x1="{left}" y1="{top}" x2="{left}" y2="{bottom}" stroke="rgba(255,255,255,0.22)" stroke-width="2" />
+        <line x1="{left}" y1="{bottom}" x2="{right}" y2="{bottom}" stroke="{SVG_CARD_BORDER}" stroke-width="2" />
+        <line x1="{left}" y1="{top}" x2="{left}" y2="{bottom}" stroke="{SVG_CARD_BORDER}" stroke-width="2" />
         {''.join(y_ticks)}
         {''.join(x_ticks)}
         {''.join(marks)}
-        <text x="{(left + right) / 2:.2f}" y="700" fill="#9eb0cd" font-size="15" text-anchor="middle">{escape(x_label)}</text>
-        <text x="36" y="{(top + bottom) / 2:.2f}" fill="#9eb0cd" font-size="15" transform="rotate(-90 36 {(top + bottom) / 2:.2f})" text-anchor="middle">{escape(y_label)}</text>
+        <text x="{(left + right) / 2:.2f}" y="700" fill="{SVG_SUBTITLE_COLOR}" font-size="15" text-anchor="middle">{escape(x_label)}</text>
+        <text x="36" y="{(top + bottom) / 2:.2f}" fill="{SVG_SUBTITLE_COLOR}" font-size="15" transform="rotate(-90 36 {(top + bottom) / 2:.2f})" text-anchor="middle">{escape(y_label)}</text>
     </svg>
     """
 
@@ -608,28 +775,28 @@ def _build_pie_svg(dataframe: pd.DataFrame, *, dataset_name: str, spec: ChartSpe
         y2 = center_y + radius * sin(end_angle)
         color = colors[index % len(colors)]
         slices.append(
-            f'<path d="M {center_x} {center_y} L {x1:.2f} {y1:.2f} A {radius} {radius} 0 {large_arc} 1 {x2:.2f} {y2:.2f} Z" fill="{color}" stroke="#08101f" stroke-width="3" />'
+            f'<path d="M {center_x} {center_y} L {x1:.2f} {y1:.2f} A {radius} {radius} 0 {large_arc} 1 {x2:.2f} {y2:.2f} Z" fill="{color}" stroke="{SVG_CARD_BACKGROUND}" stroke-width="3" />'
         )
         legend_y = 195 + index * 42
         percentage = (value / total) * 100
         legend.append(f'<rect x="740" y="{legend_y - 16}" width="18" height="18" rx="4" fill="{color}" />')
-        legend.append(f'<text x="770" y="{legend_y}" fill="#eef4ff" font-size="15">{escape(_truncate_label(label, 28))}</text>')
-        legend.append(f'<text x="1120" y="{legend_y}" fill="#9fb0cd" font-size="14" text-anchor="end">{escape(_format_number(value))} | {percentage:.1f}%</text>')
+        legend.append(f'<text x="770" y="{legend_y}" fill="{SVG_TITLE_COLOR}" font-size="15">{escape(_truncate_label(label, 28))}</text>')
+        legend.append(f'<text x="1120" y="{legend_y}" fill="{SVG_SUBTITLE_COLOR}" font-size="14" text-anchor="end">{escape(_format_number(value))} | {percentage:.1f}%</text>')
         start_angle = end_angle
 
     subtitle = f"{(spec.y_column or 'count')} distribution by {spec.x_column}"
     return f"""
     <svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
-        <rect width="{width}" height="{height}" fill="#07101d" rx="28" />
-        <rect x="34" y="28" width="{width - 68}" height="{height - 56}" rx="26" fill="#0d1628" stroke="rgba(255,255,255,0.08)" />
-        <text x="76" y="90" fill="#f5f8ff" font-size="32" font-weight="700">Pie Chart | {escape(dataset_name)}</text>
-        <text x="76" y="124" fill="#9eb0cd" font-size="16">{escape(subtitle)}</text>
+        <rect width="{width}" height="{height}" fill="{SVG_PAGE_BACKGROUND}" />
+        <rect x="34" y="28" width="{width - 68}" height="{height - 56}" rx="26" fill="{SVG_CARD_BACKGROUND}" stroke="{SVG_CARD_BORDER}" />
+        <text x="76" y="90" fill="{SVG_TITLE_COLOR}" font-size="32" font-weight="700">Pie Chart | {escape(dataset_name)}</text>
+        <text x="76" y="124" fill="{SVG_SUBTITLE_COLOR}" font-size="16">{escape(subtitle)}</text>
         <circle cx="{center_x}" cy="{center_y}" r="{radius + 30}" fill="rgba(89,214,214,0.05)" />
         {''.join(slices)}
-        <circle cx="{center_x}" cy="{center_y}" r="86" fill="#0d1628" />
-        <text x="{center_x}" y="{center_y - 6}" fill="#f4f8ff" font-size="18" text-anchor="middle" font-weight="700">{escape(_format_number(total))}</text>
-        <text x="{center_x}" y="{center_y + 24}" fill="#8ea1c2" font-size="14" text-anchor="middle">Total</text>
-        <text x="740" y="150" fill="#f4f8ff" font-size="22" font-weight="700">Breakdown</text>
+        <circle cx="{center_x}" cy="{center_y}" r="86" fill="{SVG_CARD_BACKGROUND}" />
+        <text x="{center_x}" y="{center_y - 6}" fill="{SVG_TITLE_COLOR}" font-size="18" text-anchor="middle" font-weight="700">{escape(_format_number(total))}</text>
+        <text x="{center_x}" y="{center_y + 24}" fill="{SVG_SUBTITLE_COLOR}" font-size="14" text-anchor="middle">Total</text>
+        <text x="740" y="150" fill="{SVG_TITLE_COLOR}" font-size="22" font-weight="700">Breakdown</text>
         {''.join(legend)}
     </svg>
     """
@@ -657,25 +824,25 @@ def _build_heatmap_svg(dataframe: pd.DataFrame, *, dataset_name: str, spec: Char
         x_pixel = left + x_index * cell_width
         y_pixel = top + y_index * cell_height
         cells.append(f'<rect x="{x_pixel}" y="{y_pixel}" width="{cell_width - 6}" height="{cell_height - 6}" rx="12" fill="{fill}" />')
-        cells.append(f'<text x="{x_pixel + (cell_width / 2) - 3}" y="{y_pixel + 31}" fill="#f5f8ff" font-size="13" text-anchor="middle">{escape(_format_number(value))}</text>')
+        cells.append(f'<text x="{x_pixel + (cell_width / 2) - 3}" y="{y_pixel + 31}" fill="{SVG_TITLE_COLOR}" font-size="13" text-anchor="middle">{escape(_format_number(value))}</text>')
 
     x_labels = [
-        f'<text x="{left + index * cell_width + 30}" y="{top - 18}" fill="#9eb0cd" font-size="12" text-anchor="middle">{escape(_truncate_label(label, 12))}</text>'
+        f'<text x="{left + index * cell_width + 30}" y="{top - 18}" fill="{SVG_SUBTITLE_COLOR}" font-size="12" text-anchor="middle">{escape(_truncate_label(label, 12))}</text>'
         for index, label in enumerate(x_values)
     ]
     y_labels = [
-        f'<text x="{left - 14}" y="{top + index * cell_height + 30}" fill="#9eb0cd" font-size="12" text-anchor="end">{escape(_truncate_label(label, 18))}</text>'
+        f'<text x="{left - 14}" y="{top + index * cell_height + 30}" fill="{SVG_SUBTITLE_COLOR}" font-size="12" text-anchor="end">{escape(_truncate_label(label, 18))}</text>'
         for index, label in enumerate(y_values)
     ]
 
     subtitle = f"Frequency heatmap for {spec.x_column} and {spec.y_column}"
     return f"""
     <svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
-        <rect width="{width}" height="{height}" fill="#07101d" rx="28" />
-        <rect x="34" y="28" width="{width - 68}" height="{height - 56}" rx="26" fill="#0d1628" stroke="rgba(255,255,255,0.08)" />
-        <text x="76" y="90" fill="#f5f8ff" font-size="32" font-weight="700">Heatmap | {escape(dataset_name)}</text>
-        <text x="76" y="124" fill="#9eb0cd" font-size="16">{escape(subtitle)}</text>
-        <rect x="{left - 26}" y="{top - 42}" width="{len(x_values) * cell_width + 42}" height="{len(y_values) * cell_height + 42}" rx="24" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)" />
+        <rect width="{width}" height="{height}" fill="{SVG_PAGE_BACKGROUND}" />
+        <rect x="34" y="28" width="{width - 68}" height="{height - 56}" rx="26" fill="{SVG_CARD_BACKGROUND}" stroke="{SVG_CARD_BORDER}" />
+        <text x="76" y="90" fill="{SVG_TITLE_COLOR}" font-size="32" font-weight="700">Heatmap | {escape(dataset_name)}</text>
+        <text x="76" y="124" fill="{SVG_SUBTITLE_COLOR}" font-size="16">{escape(subtitle)}</text>
+        <rect x="{left - 26}" y="{top - 42}" width="{len(x_values) * cell_width + 42}" height="{len(y_values) * cell_height + 42}" rx="24" fill="{SVG_PLOT_BACKGROUND}" stroke="{SVG_PLOT_BORDER}" />
         {''.join(x_labels)}
         {''.join(y_labels)}
         {''.join(cells)}

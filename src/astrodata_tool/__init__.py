@@ -11,6 +11,7 @@ from .engine import AutomationEngine
 from .logger import OperationLogger
 from .models import (
     DatasetArtifact,
+    GeneratedFileArtifact,
     DatasetGenerationRequest,
     ExportArtifact,
     FilterCondition,
@@ -34,6 +35,7 @@ __all__ = [
     "DataTransformer",
     "DataValidator",
     "DatasetArtifact",
+    "GeneratedFileArtifact",
     "DatasetGenerationRequest",
     "ExportArtifact",
     "FilterCondition",

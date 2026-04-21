@@ -13,7 +13,7 @@ from .data_profiler import DataProfiler
 from .data_transformer import DataTransformer
 from .data_validator import DataValidator
 from .logger import OperationLogger
-from .models import DatasetArtifact, DatasetGenerationRequest, ExportArtifact, FilterCondition, MergeConfiguration, OperationRecord, ProfileReport, ValidationReport
+from .models import DatasetArtifact, DatasetGenerationRequest, ExportArtifact, FilterCondition, GeneratedFileArtifact, MergeConfiguration, OperationRecord, ProfileReport, ValidationReport
 
 
 class AutomationEngine:
@@ -38,6 +38,32 @@ class AutomationEngine:
     def generate_dataset(self, request: DatasetGenerationRequest) -> DatasetArtifact:
         artifact = self.generator.generate(request)
         self.logger.record(artifact.operation_history[-1])
+        return artifact
+
+    def generate_large_dataset_export(
+        self,
+        request: DatasetGenerationRequest,
+        *,
+        output_path: str | Path,
+        chunk_size: int = 50_000,
+    ) -> GeneratedFileArtifact:
+        artifact = self.generator.generate_large_csv(request, output_path=output_path, chunk_size=chunk_size)
+        self.logger.record(
+            OperationRecord(
+                operation_name="generate_large_dataset_export",
+                parameters={
+                    "row_count": request.row_count,
+                    "chunk_size": chunk_size,
+                    "file_name": artifact.file_name,
+                    "columns": [column.name for column in request.columns],
+                },
+                summary=(
+                    f"Prepared large dataset export '{artifact.file_name}' with "
+                    f"{artifact.row_count} rows, {artifact.column_count} columns, and {artifact.chunk_count} chunk(s)."
+                ),
+                dataset_after=request.dataset_name,
+            )
+        )
         return artifact
 
     def clean_missing(self, dataset: DatasetArtifact, *, method: str, columns: list[str] | None = None, fill_value: str | None = None) -> DatasetArtifact:
