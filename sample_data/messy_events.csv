@@ -1,0 +1,11 @@
+event_id,user_id,transaction_date,event_type,value_usd,location,session_duration,status
+1001,U-001,2024-01-05,purchase,125.50,"New York, US",12.4,complete
+1002,U-002,2024-01-05,refund,-23.10,"Austin, US",8.2,complete
+1003,U-003,2024-01-06,view,,"Berlin, DE",5.0,pending
+1004,U-004,2024-01-06,purchase,8999.99,"Paris, FR",14.8,complete
+1005,U-005,2024-01-07,login,0.00,,1.3,complete
+1005,U-005,2024-01-07,login,0.00,,1.3,complete
+1006,U-006,2024-01-08,purchase,210.20,"Tokyo, JP",,pending
+1007,U-007,2024-01-08,view,18.50,"London, UK",4.1,
+1008,U-008,2024-01-09,purchase,310.75,"Lagos, NG",11.2,complete
+1009,U-009,2024-01-10,refund,-10.00,"Madrid, ES",7.9,complete
