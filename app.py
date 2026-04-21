@@ -593,7 +593,6 @@ def _recent_activity_frame(records: list, *, limit: int = 6) -> pd.DataFrame:
 
 def _set_page(page: str) -> None:
     st.session_state.page = page
-    st.session_state.page_selector = page
     st.rerun()
 
 
@@ -848,13 +847,15 @@ def reset_workspace() -> None:
     st.session_state.selected_dataset = None
     st.session_state.last_validation = None
     st.session_state.merge_preview = None
+    st.session_state.mode = None
+    st.session_state.input_mode = "Upload Dataset"
     st.session_state.generator_column_count = 4
     st.session_state.generator_large_export_artifact = None
     st.session_state.engine.logger.clear()
     st.session_state.export_artifact = None
     st.session_state.export_context = None
     st.session_state.page = "Dashboard"
-    st.session_state.page_selector = "Dashboard"
+    reset_generator_builder()
 
 
 def upload_phase() -> None:
@@ -2666,10 +2667,10 @@ def sidebar() -> str:
         dataset = summary["dataset"]
         selected_page = st.session_state.get("page_selector")
         stored_page = st.session_state.get("page")
-        if selected_page in PAGE_OPTIONS:
-            current_page = selected_page
-        elif stored_page in PAGE_OPTIONS:
+        if stored_page in PAGE_OPTIONS:
             current_page = stored_page
+        elif selected_page in PAGE_OPTIONS:
+            current_page = selected_page
         else:
             current_page = "Dashboard"
         st.session_state.page = current_page
