@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import date, datetime, timedelta
 from html import escape
 import inspect
@@ -14,9 +15,16 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+try:
+    import qrcode
+except ImportError:  # pragma: no cover - runtime fallback when optional dependency is missing
+    qrcode = None
+
 ROOT_DIR = Path(__file__).resolve().parent
 SRC_DIR = ROOT_DIR / "src"
 GENERATED_EXPORT_DIR = ROOT_DIR / "generated_exports"
+AUTHOR_PHOTO_PATH = Path("/Users/user/Desktop/train_data/WhatsApp Image 2026-04-21 at 6.40.46 PM.jpeg")
+AUTHOR_PORTFOLIO_URL = "https://abujuniorvandi.vercel.app/"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
@@ -394,6 +402,177 @@ APP_CSS = """
         margin-top: 0.4rem;
         line-height: 1.45;
     }
+    .author-page-hero {
+        border: 1px solid var(--card-border);
+        background:
+            radial-gradient(circle at top right, rgba(47, 107, 255, 0.08), transparent 26%),
+            linear-gradient(180deg, rgba(255,255,255,0.98), rgba(246,249,255,0.98));
+        border-radius: 24px;
+        padding: 1.55rem 1.7rem;
+        margin-bottom: 1.2rem;
+        box-shadow: var(--shadow-soft);
+    }
+    .author-page-kicker {
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        font-size: 0.74rem;
+        font-weight: 800;
+        margin-bottom: 0.7rem;
+    }
+    .author-page-hero h1 {
+        margin: 0 0 0.95rem 0;
+        color: var(--text-strong);
+        font-size: 2.15rem;
+        line-height: 1.05;
+    }
+    .author-page-hero p {
+        margin: 0 0 0.9rem 0;
+        color: var(--text-body);
+        font-size: 1rem;
+        line-height: 1.78;
+        max-width: 68rem;
+    }
+    .author-page-hero p:last-child {
+        margin-bottom: 0;
+    }
+    .author-photo-frame {
+        border: none;
+        border-radius: 0;
+        overflow: visible;
+        background: transparent;
+        box-shadow: none;
+    }
+    .author-photo-frame img {
+        display: block;
+        width: 100%;
+        height: auto;
+    }
+    .author-photo-caption {
+        margin-top: 0.75rem;
+        color: var(--text-body);
+        font-size: 0.87rem;
+        line-height: 1.55;
+        padding-left: 0.1rem;
+    }
+    .author-profile-details {
+        margin-top: 0.9rem;
+        color: var(--text-body);
+    }
+    .author-profile-title {
+        color: var(--text-strong);
+        font-size: 1rem;
+        font-weight: 700;
+        line-height: 1.45;
+        margin-bottom: 0.45rem;
+    }
+    .author-profile-line {
+        font-size: 0.92rem;
+        line-height: 1.7;
+        margin: 0;
+    }
+    .author-profile-label {
+        color: var(--text-strong);
+        font-weight: 700;
+    }
+    .author-profile-line a {
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 600;
+    }
+    .author-profile-line a:hover {
+        text-decoration: underline;
+    }
+    .author-qr-section {
+        margin-top: 2.25rem;
+        text-align: center;
+    }
+    .author-qr-label {
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        font-size: 0.72rem;
+        font-weight: 700;
+        margin-bottom: 0.45rem;
+    }
+    .author-qr-title {
+        color: var(--text-strong);
+        font-size: 1.05rem;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+    }
+    .author-qr-copy {
+        color: var(--text-body);
+        font-size: 0.92rem;
+        line-height: 1.6;
+        margin-bottom: 0.95rem;
+    }
+    .author-qr-image {
+        width: 180px;
+        max-width: 100%;
+        height: auto;
+        display: block;
+        margin: 0 auto;
+    }
+    .author-copy-card {
+        border: 1px solid var(--card-border);
+        border-radius: 24px;
+        padding: 1.5rem 1.55rem;
+        background:
+            radial-gradient(circle at top right, rgba(47, 107, 255, 0.06), transparent 25%),
+            rgba(255,255,255,0.97);
+        box-shadow: var(--shadow-soft);
+    }
+    .author-kicker {
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        font-size: 0.75rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+    }
+    .author-name {
+        color: var(--text-strong);
+        font-size: 2rem;
+        font-weight: 800;
+        line-height: 1.06;
+        margin: 0;
+    }
+    .author-role {
+        color: var(--text-body);
+        font-size: 1rem;
+        margin-top: 0.35rem;
+        margin-bottom: 1rem;
+    }
+    .author-quote {
+        margin: 0 0 1rem 0;
+        padding: 0.95rem 1rem;
+        border-left: 4px solid var(--accent);
+        background: rgba(47, 107, 255, 0.06);
+        border-radius: 0 16px 16px 0;
+        color: var(--text-strong);
+        font-size: 1rem;
+        line-height: 1.62;
+    }
+    .author-body {
+        color: var(--text-body);
+        font-size: 0.97rem;
+        line-height: 1.82;
+    }
+    .author-body p {
+        margin: 0 0 0.95rem 0;
+    }
+    .author-body p:last-child {
+        margin-bottom: 0;
+    }
+    @media (max-width: 980px) {
+        .author-page-hero h1 {
+            font-size: 1.8rem;
+        }
+        .author-copy-card {
+            padding: 1.25rem 1.2rem;
+        }
+    }
 </style>
 """
 
@@ -408,6 +587,7 @@ PAGE_OPTIONS = [
     "Statistical Tables",
     "Export",
     "History",
+    "About Developer",
 ]
 
 PAGE_DESCRIPTIONS = {
@@ -421,6 +601,7 @@ PAGE_DESCRIPTIONS = {
     "Statistical Tables": "Generate formatted statistical summaries for reporting.",
     "Export": "Package the active dataset for downstream delivery.",
     "History": "Review the audit trail for the current workspace session.",
+    "About Developer": "Meet the developer behind the platform in a dedicated author profile view.",
 }
 
 QUICK_ACTIONS = [
@@ -460,6 +641,16 @@ def init_state() -> None:
 
 def dataset_names() -> list[str]:
     return list(st.session_state.datasets.keys())
+
+
+@st.cache_data(show_spinner=False)
+def build_qr_code_png_bytes(content: str) -> bytes | None:
+    if qrcode is None:
+        return None
+    qr_image = qrcode.make(content)
+    buffer = BytesIO()
+    qr_image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _engine_requires_refresh(engine: object) -> bool:
@@ -2659,6 +2850,88 @@ def render_history() -> None:
     )
 
 
+def render_about_developer() -> None:
+    st.markdown(
+        """
+       
+        """,
+        unsafe_allow_html=True,
+    )
+
+    author_columns = st.columns([0.82, 1.18], gap="large")
+    with author_columns[0]:
+        if AUTHOR_PHOTO_PATH.exists():
+            photo_bytes = AUTHOR_PHOTO_PATH.read_bytes()
+            photo_base64 = base64.b64encode(photo_bytes).decode("ascii")
+            photo_mime = "image/png" if AUTHOR_PHOTO_PATH.suffix.lower() == ".png" else "image/jpeg"
+            st.markdown(
+                f'''
+                <div class="author-photo-frame">
+                    <img src="data:{photo_mime};base64,{photo_base64}" alt="Portrait of Abu Jr. Vandi" />
+                </div>
+                ''',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("Developer photo is currently unavailable at the configured path.")
+        st.markdown(
+            """
+            <div class="author-profile-details">
+                <div class="author-profile-title">Computer Science &amp; Data Analytics Professional</div>
+                <p class="author-profile-line">+232 73914398 | <a href="mailto:abujuniorv@gmail.com">abujuniorv@gmail.com</a></p>
+                <p class="author-profile-line"><span class="author-profile-label">Portfolio:</span> <a href="https://abujuniorvandi.vercel.app/" target="_blank" rel="noopener noreferrer">abujuniorvandi.vercel.app</a></p>
+                <p class="author-profile-line">Sierra Leonean | Korlie Limited (WanGov)</p>
+                <p class="author-profile-line"><span class="author-profile-label">LinkedIn:</span> <a href="https://www.linkedin.com/in/abu-junior-vandi-67b12425a/" target="_blank" rel="noopener noreferrer">abu-junior-vandi-67b12425a</a></p>
+                <p class="author-profile-line"><span class="author-profile-label">Facebook:</span> <a href="https://www.facebook.com/people/Abu-Markovic-Vandi-Jr/100007970957639/?mibextid=wwXIfr&amp;rdid=GRDZ5tNRWUNmgkz6&amp;share_url=https%3A%2F%2Fwww.facebook.com%2Fshare%2F1ADLjFL2aK%2F%3Fmibextid%3DwwXIfr" target="_blank" rel="noopener noreferrer">Abu Markovic Vandi Jr</a></p>
+                <p class="author-profile-line"><span class="author-profile-label">Instagram:</span> <a href="https://www.instagram.com/abuzo_marvani?igsh=Znh2cDl6M24xcnk3&amp;utm_source=qr" target="_blank" rel="noopener noreferrer">@abuzo_marvani</a></p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with author_columns[1]:
+        st.markdown(
+            """
+            <div class="author-kicker">Developer & Project Author</div>
+            <h2 class="author-name">Abu Jr. Vandi</h2>
+            <div class="author-role">Creator of the Vandi Data Center Automation Engine</div>
+            <div class="author-quote">
+                “Strong software should read with clarity, execute with discipline, and leave behind a system that others can trust.”
+            </div>
+            <div class="author-body">
+                <p>
+                    Abu Jr. Vandi is presented here as the author behind the platform’s design direction, engineering structure, and operational vision.
+                    The profile is written in the tone of a professional publication: concise, deliberate, and focused on authorship rather than decoration.
+                </p>
+                <p>
+                    This page recognizes the developer not merely as a coder, but as the principal steward of a working system built for data operations,
+                    workflow discipline, and practical usability. The application itself reflects that authorship through organized modules, controlled
+                    state handling, workflow continuity, and a presentation layer designed to remain readable under real use.
+                </p>
+                
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    qr_code_png_bytes = build_qr_code_png_bytes(AUTHOR_PORTFOLIO_URL)
+    if qr_code_png_bytes:
+        st.markdown(
+            f"""
+            <div class="author-qr-section">
+                <div class="author-qr-label">Portfolio Access</div>
+                <div class="author-qr-title">Scan To Open </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        qr_columns = st.columns([1, 0.42, 1])
+        with qr_columns[1]:
+            st.image(qr_code_png_bytes, use_container_width=True)
+    else:
+        st.caption("Install the project requirements to enable the portfolio QR code on this page.")
+
+
 def sidebar() -> str:
     with st.sidebar:
         summary = _workspace_summary()
@@ -2791,6 +3064,8 @@ def main() -> None:
         render_export()
     elif page == "History":
         render_history()
+    elif page == "About Developer":
+        render_about_developer()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
