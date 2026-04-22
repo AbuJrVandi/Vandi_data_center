@@ -454,8 +454,6 @@ def init_state() -> None:
         st.session_state.export_context = None
     if "page" not in st.session_state:
         st.session_state.page = "Dashboard"
-    if "page_selector" not in st.session_state:
-        st.session_state.page_selector = st.session_state.page
     if "generator_large_export_artifact" not in st.session_state:
         st.session_state.generator_large_export_artifact = None
 
@@ -2665,16 +2663,8 @@ def sidebar() -> str:
     with st.sidebar:
         summary = _workspace_summary()
         dataset = summary["dataset"]
-        selected_page = st.session_state.get("page_selector")
-        stored_page = st.session_state.get("page")
-        if stored_page in PAGE_OPTIONS:
-            current_page = stored_page
-        elif selected_page in PAGE_OPTIONS:
-            current_page = selected_page
-        else:
-            current_page = "Dashboard"
+        current_page = st.session_state.page if st.session_state.page in PAGE_OPTIONS else "Dashboard"
         st.session_state.page = current_page
-        st.session_state.page_selector = current_page
         recent_records = list(summary["records"])[-3:][::-1]
         status_tone = escape(str(summary["status_tone"]))
         status_label = escape(str(summary["status_label"]))
@@ -2713,15 +2703,6 @@ def sidebar() -> str:
         else:
             st.caption("No datasets are loaded into the workspace yet.")
         st.markdown(
-            f"""
-            <div class="sidebar-panel">
-                <div class="sidebar-panel-title">Current Focus</div>
-                <div class="sidebar-keyline">{escape(current_page)}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown(
             """
             <div class="sidebar-panel">
                 <div class="sidebar-panel-title">Navigation</div>
@@ -2732,12 +2713,22 @@ def sidebar() -> str:
         page = st.radio(
             "Workflow Modules",
             options=PAGE_OPTIONS,
-            key="page_selector",
+            index=PAGE_OPTIONS.index(current_page),
             label_visibility="collapsed",
         )
-        if page != st.session_state.page:
+        if page != current_page:
             st.session_state.page = page
-        st.caption(PAGE_DESCRIPTIONS[page])
+            current_page = page
+        st.markdown(
+            f"""
+            <div class="sidebar-panel">
+                <div class="sidebar-panel-title">Current Focus</div>
+                <div class="sidebar-keyline">{escape(current_page)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption(PAGE_DESCRIPTIONS[current_page])
         if recent_records:
             activity_markup = "".join(
                 f"""
@@ -2771,7 +2762,7 @@ def sidebar() -> str:
         if st.button("Reset Workspace", width="stretch"):
             reset_workspace()
             st.rerun()
-        return page
+        return current_page
 
 
 def main() -> None:
