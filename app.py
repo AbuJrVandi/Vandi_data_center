@@ -24,7 +24,6 @@ ROOT_DIR = Path(__file__).resolve().parent
 SRC_DIR = ROOT_DIR / "src"
 GENERATED_EXPORT_DIR = ROOT_DIR / "generated_exports"
 AUTHOR_PHOTO_CANDIDATES = (
-    "WhatsApp_Image_2026-04-21_at_6.40.46_PM-removebg-preview.png",
     "WhatsApp Image 2026-04-21 at 6.40.46 PM.jpeg",
 )
 AUTHOR_PORTFOLIO_URL = "https://abujuniorvandi.vercel.app/"
