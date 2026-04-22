@@ -23,10 +23,24 @@ except ImportError:  # pragma: no cover - runtime fallback when optional depende
 ROOT_DIR = Path(__file__).resolve().parent
 SRC_DIR = ROOT_DIR / "src"
 GENERATED_EXPORT_DIR = ROOT_DIR / "generated_exports"
-AUTHOR_PHOTO_PATH = Path("/Users/user/Desktop/train_data/WhatsApp Image 2026-04-21 at 6.40.46 PM.jpeg")
+AUTHOR_PHOTO_CANDIDATES = (
+    "WhatsApp_Image_2026-04-21_at_6.40.46_PM-removebg-preview.png",
+    "WhatsApp Image 2026-04-21 at 6.40.46 PM.jpeg",
+)
 AUTHOR_PORTFOLIO_URL = "https://abujuniorvandi.vercel.app/"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+
+def resolve_author_photo_path() -> Path | None:
+    for relative_path in AUTHOR_PHOTO_CANDIDATES:
+        candidate = ROOT_DIR / relative_path
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+AUTHOR_PHOTO_PATH = resolve_author_photo_path()
 
 from astrodata_tool import (
     AutomationEngine,
@@ -2860,7 +2874,7 @@ def render_about_developer() -> None:
 
     author_columns = st.columns([0.82, 1.18], gap="large")
     with author_columns[0]:
-        if AUTHOR_PHOTO_PATH.exists():
+        if AUTHOR_PHOTO_PATH is not None:
             photo_bytes = AUTHOR_PHOTO_PATH.read_bytes()
             photo_base64 = base64.b64encode(photo_bytes).decode("ascii")
             photo_mime = "image/png" if AUTHOR_PHOTO_PATH.suffix.lower() == ".png" else "image/jpeg"
